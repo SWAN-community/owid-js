@@ -86,6 +86,26 @@ var supplier = new owid("[encrypted supplier OWID]");
 supplier.verify(offerId).then(valid  => console.log(valid)); 
 ```
 
+Verify multiple OWID base 64 strings.
+
+```js
+var o = new owid("[encrypted data]");
+
+o.verify(["encrypted data1", "encrypted data2", "encrypted data3"]).then(valid => console.log(valid));
+```
+
+Verify multiple OWID instances.
+
+```js
+var o = new owid("[encrypted data]");
+
+var offerId1 = new owid("[encrypted data1]");
+var offerId2 = new owid("[encrypted data2]");
+var offerId3 = new owid("[encrypted data3]");
+
+o.verify([offerId1, offerId2, offerId3]).then(valid => console.log(valid));
+```
+
 ## Tests
 
 Tests are performed using Jest.
