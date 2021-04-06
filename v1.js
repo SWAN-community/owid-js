@@ -1,16 +1,32 @@
 /**
  * @class {owid} Open Web Id (OWID) library for client side parsing and 
  * verification of Open Web Ids.
- * @param {string} owid - base 64 encoded byte array
+ * @param {string} data             - base 64 encoded byte array
+ * @property {object} owid          - The OWID tree.
+ * @property {string} domain        - Returns the creator of the OWID.
+ * @property {int} date          - Returns the date and time the OWID was created in UTC.
+ * @property {Uint8Array} signature - Returns the signature as byte array.
  */
-owid = function (owid) {
+owid = function (data) {
     "use-strict";
 
-    this.owid = owid;
+    //#region Constructor
 
-    if (owid !== undefined && typeof owid !== "string") {
-        throw "'owid' parameter must be a string or undefined";
+    if (data !== undefined && typeof data !== "string") {
+        throw "'data' parameter must be a string or undefined";
     }
+
+    if (data !== undefined) {
+        this.data = data;
+        this.owid = parse(data);
+        this.date = this.owid.date;
+        this.domain = this.owid.domain;
+        this.signature = this.owid.signature;
+    } else {
+        this.data = "";
+    }
+
+    //#endregion
 
     //#region  constants
 
@@ -28,6 +44,9 @@ owid = function (owid) {
     const regExpSpecials = [
         "[", "\\", "^", "$", ".", "|", "?", "*", "+", "(", ")"
     ];
+
+    // The base year for all OWID dates.
+    const ioDateBase = '2020-01-01T00:00:00';
 
     // Maximum depth of multi-dimensional Arrays to traverse when verifying 
     // multiple OWIDs.
@@ -201,6 +220,7 @@ owid = function (owid) {
     /**
      * Use the well known end point for the alleged OWID creator. 
      * @param {*} p - parent OWID as base 64 encoded byte array.
+     * @param {string} t - base 64 encoded byte array representing an OWID tree.
      * @param {Object} o - an OWID tree.
      * @returns {Promise} Promise resolves to true if OWID is valid.
      */
@@ -223,6 +243,31 @@ owid = function (owid) {
     function verifyOWIDWithPublicKey(r, t) {
         var o = parse(t);
         return verifyOWIDObjectWithPublicKey(r, o);
+    }
+
+    function importRsaKey(pem) {
+        // Remove the header, footer and line breaks to get the PEM content.
+        var lines = pem.split('\n');
+        var pemContents = '';
+        for (var i = 0; i < lines.length; i++) {
+            if (lines[i].trim().length > 0 &&
+                lines[i].indexOf('-----BEGIN RSA PUBLIC KEY-----') < 0 &&
+                lines[i].indexOf('-----END RSA PUBLIC KEY-----') < 0) {
+                pemContents += lines[i].trim();
+            }
+        }
+
+        // Import the public key with the SHA-256 hash algorithm.
+        return window.crypto.subtle.importKey(
+            "spki",
+            Uint8Array.from(atob(pemContents), c => c.charCodeAt(0)),
+            {
+                name: "RSASSA-PKCS1-v1_5",
+                hash: "SHA-256"
+            },
+            false,
+            ["verify"]
+        );
     }
 
     /**
@@ -252,6 +297,17 @@ owid = function (owid) {
 
     //#region public functions
 
+    /**
+     * Returns the OWID creation date as a JavaScript Date object.
+     * @returns {Object} -  the OWID instance creation date as a JavaScript Date
+     * object.
+     */
+    this.dateAsJavaScriptDate = function() {
+        var jsDate = new Date();
+        jsDate.setTime(new Date(ioDateBase).getTime() + (this.date * 60 * 1000));
+        return jsDate;
+    }
+
     /** 
      * Parses a base 64 encoded byte array into a OWID tree.
      * @param {string} t - base 64 encoded byte array representing an OWID tree.
@@ -259,9 +315,33 @@ owid = function (owid) {
      */
     this.parse = function (t) {
         if (t === undefined) {
-            t = owid;
+            t = this.data;
+        }
+        if (t === "") {
+            throw "As this instance was created without any data, you must " +
+            "provide a base 64 encoded OWID as a parameter to this method.";
         }
         return parse(t);
+    }
+
+    /**
+     * Returns the payload as a string.
+     * @function
+     * @memberof owid
+     * @returns {string} This OWID instance payload as a string.
+     */
+    this.payloadAsString = function () {
+        return this.owid.payloadAsString();
+    }
+
+    /**
+     * Returns the payload as a base 64 array.
+     * @function
+     * @memberof owid
+     * @returns {string} This instance's payload as a base 64 array.
+     */
+    this.payloadAsBase64 = function () {
+        return parseToString(this.owid.payload);
     }
 
     /**
@@ -270,153 +350,25 @@ owid = function (owid) {
      * @param {string} d - organization domain.
      * @param {string} r - return url
      */
-    this.stop = function (s, d, r) {
-        fetch("/stop?" +
-            "host=" + encodeURIComponent(d) + "&" +
-            "returnUrl=" + encodeURIComponent(r),
-            { method: "GET", mode: "cors", cache: "no-cache" })
-            .then(r => r.text())
-            .then(m => {
-                console.log(m);
-                window.location.href = m;
-            })
-            .catch(x => {
-                console.log(x);
-            });
-    }
-
-    /**
-     * Append complaint email link.
-     * @param {Object} e - parentNode of the current script element.
-     * @param {string} d - organization domain.
-     * @param {string} o - base64 encoded byte array representing an OWID tree.
-     * @param {string} s - SWAN OWID
-     * @param {string} g - complaint button display icon uri.
-     */
-    this.appendComplaintEmail = function (e, d, o, s, g) {
-        fetch((d ? "//" + d : "") + "/complain?" +
-            "offerid=" + encodeURIComponent(o) + "&" +
-            "swanowid=" + encodeURIComponent(s),
-            { method: "GET", mode: "cors", cache: "no-cache" })
-            .then(r => r.text())
-            .then(m => {
-                var a = document.createElement("a");
-                a.href = m;
-                if (g) {
-                    var i = document.createElement("img");
-                    i.src = g;
-                    i.style = "width:32px"
-                    a.appendChild(i);
-                } else {
-                    a.innerText = "?";
-                }
-                e.appendChild(a);
-            }).catch(x => {
-                console.log(x);
-            });
-    }
-
-    /**
-     * 
-     * @param {Object} e - parentNode of the current script element.
-     * @param {string} s - base64 encoded byte array representing an OWID tree.
-     */
-    this.appendName = function (e, s) {
-        fetch("//" + parse(s).domain + "/owid/api/v1/creator",
-            { method: "GET", mode: "cors" })
-            .then(r => r.json())
-            .then(o => {
-                var t = document.createTextNode(o.name);
-                e.appendChild(t);
-            }).catch(x => {
-                console.log(x);
-                var t = document.createTextNode(x);
-                e.appendChild(t);
-            });
-    }
-
-    /**
-     * 
-     * @param {Object} e - parentNode of the current script element.
-     * @param {string} r - 
-     * @param {string} t - base64 encoded byte array representing an OWID tree.
-     */
-    this.appendAuditMark = function (e, r, t) {
-
-        function importRsaKey(pem) {
-
-            // Remove the header, footer and line breaks to get the PEM content.
-            var lines = pem.split('\n');
-            var pemContents = '';
-            for (var i = 0; i < lines.length; i++) {
-                if (lines[i].trim().length > 0 &&
-                    lines[i].indexOf('-----BEGIN RSA PUBLIC KEY-----') < 0 &&
-                    lines[i].indexOf('-----END RSA PUBLIC KEY-----') < 0) {
-                    pemContents += lines[i].trim();
-                }
-            }
-
-            // Import the public key with the SHA-256 hash algorithm.
-            return window.crypto.subtle.importKey(
-                "spki",
-                Uint8Array.from(atob(pemContents), c => c.charCodeAt(0)),
-                {
-                    name: "RSASSA-PKCS1-v1_5",
-                    hash: "SHA-256"
-                },
-                false,
-                ["verify"]
-            );
-        }
-
-        // Append a failure HTML element.
-        function returnFailed(e) {
-            var t = document.createTextNode("Failed");
-            e.appendChild(t);
-        }
-
-        // Append an audit HTML element.
-        function addAuditMark(e, r) {
-            var t = document.createElement("img");
-            if (r) {
-                t.src = "/green.svg";
-            } else {
-                t.src = "/red.svg";
-            }
-            e.appendChild(t);
-        }
-
-        // Valid the OWID against the creators public key OR if crypto not 
-        // supported the well known end point for OWID creators. OWID providers
-        // are not required to operate an end point for verifying OWIDs so these
-        // calls might fail to return a result.
-        if (window.crypto.subtle) {
-            verifyOWIDWithPublicKey(r, t)
-                .then(r => addAuditMark(e, r))
-                .catch(x => {
-                    console.log(x);
-                    returnFailed(e);
+         this.stop = function (s, d, r) {
+            fetch("/stop?" +
+                "host=" + encodeURIComponent(d) + "&" +
+                "returnUrl=" + encodeURIComponent(r),
+                { method: "GET", mode: "cors", cache: "no-cache" })
+                .then(r => r.text())
+                .then(m => {
+                    console.log(m);
+                    window.location.href = m;
                 })
-        } else {
-            verifyOWIDWithAPI(r, t)
-                .then(r => addAuditMark(e, r))
                 .catch(x => {
                     console.log(x);
-                    returnFailed(e);
                 });
         }
-    }
-
-    /**
-     * Get this OWID instance's payload as a string.
-     * @returns {string} this OWID instance payload as a string.
-     */
-    this.payloadAsString = function () {
-        return parse(owid).payloadAsString();
-    }
 
     /**
      * Verify the OWID of this instance and optionally any other OWIDs provided.
+     * @function
+     * @memberof owid
      * @param {(Object|Object[]|string|string[]|Array)} owids - Other OWIDs to 
      * verify.
      * @returns {Promise} Promise object resolves to true if all OWIDs are 
@@ -425,17 +377,17 @@ owid = function (owid) {
     this.verify = function (owids) {
         function verifyStringOWID(o) {
             if (window.crypto.subtle) {
-                return verifyOWIDWithPublicKey("", o);
+                return verifyOWIDWithPublicKey(this.data, o);
             } else {
-                return verifyOWIDWithAPI("", o);
+                return verifyOWIDWithAPI(this.data, o);
             }
         }
 
         function verifyObjectOWID(o) {
             if (window.crypto.subtle) {
-                return verifyOWIDObjectWithPublicKey("", o);
+                return verifyOWIDObjectWithPublicKey(this.data, o);
             } else {
-                return verifyOWIDObjectWithAPI("", "", o);
+                return verifyOWIDObjectWithAPI(this.data, parseToString(getByteArray(o)), o);
             }
         }
 
@@ -446,8 +398,7 @@ owid = function (owid) {
          * @returns 
          */
         function getOWIDs(owids) {
-            owids = [owid, owids];
-            return getOWIDsFromArray(owids);
+            return getOWIDsFromArray([owids]);
         }
 
         /**
@@ -526,7 +477,7 @@ owid = function (owid) {
             if (Array.isArray(o)) {
                 return getOWIDsFromArray(o, depth)
             } else if (o.hasOwnProperty('verify') && o.hasOwnProperty('parse')) {
-                return [o.parse()];
+                return [o.data];
             } else if (o.hasOwnProperty('domain') && o.hasOwnProperty('version')) {
                 return parseToString(getByteArray(o));
             }
