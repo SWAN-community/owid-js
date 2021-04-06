@@ -6,11 +6,11 @@ Open Web Id (OWID) - a open source cryptographically secure shared web identifie
 schema implemented in JavaScript
 
 Read the [OWID](https://github.com/SWAN-community/owid) project to learn more about
-the concepts before looking into this reference implementation.
+the concepts before looking into this implementation.
 
 ## Usage
 
-To use OWID.js:
+To use OWID-js:
 
 * Add the `owid.js` file to your CDN or web application.
 * reference owid.js:
@@ -19,7 +19,7 @@ To use OWID.js:
     ```
 * call the library:
     ```js
-    var o = new owid("owid base 64 string");
+    var o = new owid("[owid base 64 string]");
     o.verify().then(valid  => console.log(valid));
     ```
 ## Interface
@@ -66,11 +66,11 @@ Verify an OWID.
 ```js
 var o = new owid("[encrypted data]");
  
-console.log(o.payloadAsString()); // Returns the payload as a string
-console.log(o.payloadAsBase64()); // Returns the payload as a base 64 array
-console.log(o.domain); // Returns the creator of the OWID
-console.log(o.date); // Returns the date and time the OWID was created in UTC
-console.log(o.signature); // Returns the signature as byte array
+console.log(o.payloadAsString()); // Returns the payload as a string.
+console.log(o.payloadAsBase64()); // Returns the payload as a base 64 string.
+console.log(o.domain); // Returns the creator of the OWID.
+console.log(o.date); // Returns the date and time the OWID was created in UTC as minutes since `2020-01-01 00:00`.
+console.log(o.signature); // Returns the signature as byte array.
 
 o.verify().then(valid  => console.log(valid)); // Uses a promise to determine if the OWID is valid.
 
