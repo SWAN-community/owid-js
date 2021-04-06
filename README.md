@@ -90,6 +90,13 @@ supplier.verify(offerId).then(valid  => console.log(valid));
 
 Tests are performed using Jest.
 
+### Pre-requisites
+
+* Nodejs version 15.x or above
+* Yarn
+
+### Steps
+
 Install yarn,
 
 ```bash

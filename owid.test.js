@@ -1,35 +1,54 @@
 const owid = require('./v1');
-
 const { subtle } = require('crypto').webcrypto;
 
 Object.defineProperty(global.self, 'crypto', {
   value: {
-    subtle: subtle
+    //subtle: subtle
   }
 });
 
-global.fetch = jest.fn(() =>
-  Promise.resolve({
-    json: () => Promise.resolve({ valid: true }),
-  })
-);
-
 const testCreatorOWID = 
-    "AjUxZGEudWsA2wIKAFMBAAABAWhlYWRpbmcAbmV3LXBvcmstbGltZXMudWs" +
-    "AEAAAACdy1uYpIUDfig5Yf/qrTlACNTFkYS51awDs/AkAEAAAAGbRLWHGH07KoY4" +
-    "R9rDekNZxOJK3rhBYW5SbGoxD3oGrrckBvqf2gJ9eAuc4egHGxGPqKrhl8mslf7X" +
-    "TlkUhXDkIKj47WYaCIzN83PgrsroOAjUxZGEudWsA2wIKABQAAADv3O49scMBfBj" +
-    "eITlwSG/2ri4cu0etpQdFNMgaEf1pVN2hOV6xER9k5TXGpOuBMViaRdUQcnQQK2N" +
-    "6JFW2WV6JhT+mgIzVa7unKKpoLh+r/GSjgKkCY21wLnN3YW4tZGVtby51awDbAgo" +
-    "AAgAAAG9uYb2MpYHagU7oE+zvLqBhyQTNVmZquLrT+ut2GBjqYWDjC7B8KZXSJy0" +
-    "rM4qDs1vI1XXKEIn3SGgZUvpCy8nohADJxLC8vAN3MgbQ8rmI8Y7NF4y8DBcAW0m" +
-    "9bO9bhiO+socLw/ylL9dRcvQVojB0UNtmpiRD7LgrahVbyhUE6rk5";
+    "AjUxZGIudWsAKyQKAFUBAAABAWhlYWRpbmcAcG9wLXVwLnN3YW4tZGVtby51awAQAAAA27eO" +
+    "AAPSTXmKZT79iWgRagI1MWRhLnVrACskCgAQAAAAs1WelonmS0KoK6uiN3rz1rAxJHj2rNKv" +
+    "V/9OMOyFlWHY/tbwpdVupNG62p3pCWCuzgV2YMEth3coZhFSZHXJ1mO/U/bkHhGCSG/BStI/" +
+    "fJcCNTFkYi51awArJAoAFAAAAO/c7j2xwwF8GN4hOXBIb/auLhy7mftegVZqvbepqw8nVf8B" +
+    "yI94w9I/XLNwf5kAFpFeSeo8kwRhXqUyUuWT7FYIi4DnOP9zyTaAY8xgMh77oUjL/QJjbXAu" +
+    "c3dhbi1kZW1vLnVrACskCgACAAAAb25Lyrbl9PDGs6VAMqgozsfxCqsVWX6pf2JyFim3zg6l" +
+    "LivRDqpCD921elvxdn85/vK0msyTOMjE8buKAza/H2zBAEqEMbMuIoZL8Ji4m4ScYkpQvD3K" +
+    "jsLbqI5c7+Ra/Ju43vBMp2st7QLHD4sxwPugeSBEgQRkevAm0H1a3jekMEA";
             
 const testSupplierOWID = 
-    "";
+    "AnBvcC11cC5zd2FuLWRlbW8udWsAKyQKAAIAAAABA6Ljm9cxZfnmwRMjv4MQ0PrAjf8y29Ru" +
+    "0sjZG5R+mkjBtQD9J02xZQIk5czsKJzOl6IkOPvbPSGakxyq0HPLX+w";
 
 const testBadOWID = 
-    "";
+    "AmJhZHNzcC5zd2FuLWRlbW8udWsAKyQKAAIAAAABAxu+OOtismihze3LlcNuvT2WXNTGSio" +
+    "gw36t85HLwL6YdV4i9kYDCdsP54RS8on/roKKASyh19TpcUQxkIRALFk";
+
+beforeEach(() => {
+    fetchMock.doMock();
+
+    fetchMock.mockResponse(req => {
+        var urlString = req.url;
+        if (urlString.startsWith("//")) {
+            urlString = "http:" + urlString;
+        }
+        var url = new URL(urlString);
+
+        if (url.pathname.endsWith("/verify")) {
+            if (url.searchParams.get('owid') == testBadOWID) {
+                return Promise.resolve(JSON.stringify({valid: false}));
+            } else {
+                return Promise.resolve(JSON.stringify({valid: true}));
+            }
+        } else {
+          return {
+            status: 404,
+            body: "Not Found"
+          };
+        }
+    });
+});
 
 test('verify OWID', () => {
     var o = new owid(testCreatorOWID);

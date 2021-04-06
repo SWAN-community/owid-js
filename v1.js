@@ -375,19 +375,19 @@ owid = function (data) {
      * verified.
      */
     this.verify = function (owids) {
-        function verifyStringOWID(o) {
+        function verifyStringOWID(p, o) {
             if (window.crypto.subtle) {
-                return verifyOWIDWithPublicKey(this.data, o);
+                return verifyOWIDWithPublicKey(p, o);
             } else {
-                return verifyOWIDWithAPI(this.data, o);
+                return verifyOWIDWithAPI(p, o);
             }
         }
 
-        function verifyObjectOWID(o) {
+        function verifyObjectOWID(p, o) {
             if (window.crypto.subtle) {
-                return verifyOWIDObjectWithPublicKey(this.data, o);
+                return verifyOWIDObjectWithPublicKey(p, o);
             } else {
-                return verifyOWIDObjectWithAPI(this.data, parseToString(getByteArray(o)), o);
+                return verifyOWIDObjectWithAPI(p, parseToString(getByteArray(o)), o);
             }
         }
 
@@ -486,9 +486,17 @@ owid = function (data) {
 
         return Promise.all(getOWIDs(owids).map(o => {
             if (typeof o === "string") {
-                return verifyStringOWID(o);
+                if (this.data !== "") {
+                    return verifyStringOWID(o, this.data);
+                } else {
+                    return verifyStringOWID("", o);
+                }
             } else if (typeof o === "object") {
-                return verifyObjectOWID(o);
+                if (this.data !== ""){
+                    return verifyObjectOWID(o, this.data);
+                } else {
+                    return verifyObjectOWID("", o);
+                }
             } else {
                 return new Promise.reject(`unsupported type: ${typeof o}, supported types are 'string' and 'object'`);
             }
