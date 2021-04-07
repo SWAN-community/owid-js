@@ -540,7 +540,6 @@ owid = function (data) {
                 }
             }))
             .then(r => r.length > 0 && r.every(v => v))
-            .catch(e => console.log(e));
         } else {
             if (this.data === undefined || this.data === "") {
                 throw "OWID must have a value and cannot be an empty string."
