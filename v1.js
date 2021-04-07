@@ -232,10 +232,7 @@ owid = function (data) {
             { method: "GET", mode: "cors", cache: "no-cache" })
             .then(r => {
                 if (!r.ok) {
-                    var err = new Error("HTTP status code: " + r.status)
-                    err.response = r
-                    err.status = r.status
-                    throw err
+                    fetchError("Verify", r);
                 }
                 return r.json()
             })
@@ -294,10 +291,7 @@ owid = function (data) {
             { mode: "cors", cache: "default" })
             .then(response => {
                 if (!response.ok) {
-                    var err = new Error("HTTP status code: " + response.status)
-                    err.response = response
-                    err.status = response.status
-                    throw err
+                    fetchError("Creator", response);
                 }
                 return response.json()
             })
@@ -307,6 +301,18 @@ owid = function (data) {
                 k,
                 o.signature,
                 m));
+    }
+
+    /**
+     * Throw error from fetch response.
+     * @param {string} n - Name of the fetch call
+     * @param {Object} r - Response object
+     */
+    function fetchError(n, r) {
+        throw "'" + n + "' request HTTP status code: " + 
+        r.status + 
+        ". Response: " + 
+        r.text();
     }
 
     //#endregion
@@ -383,10 +389,7 @@ owid = function (data) {
                 { method: "GET", mode: "cors", cache: "no-cache" })
                 .then(r => {
                     if (!r.ok) {
-                        var err = new Error("HTTP status code: " + r.status)
-                        err.response = r
-                        err.status = r.status
-                        throw err
+                        fetchError("Stop", r);
                     }
                     return r.text();
                 })
