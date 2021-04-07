@@ -230,7 +230,15 @@ owid = function (data) {
             "?parent=" + encodeURIComponent(p) +
             "&owid=" + encodeURIComponent(t),
             { method: "GET", mode: "cors", cache: "no-cache" })
-            .then(r => r.json())
+            .then(r => {
+                if (!r.ok) {
+                    var err = new Error("HTTP status code: " + r.status)
+                    err.response = r
+                    err.status = r.status
+                    throw err
+                }
+                return r.json()
+            })
             .then(r => r.valid);
     }
 
@@ -284,7 +292,15 @@ owid = function (data) {
         m.set(b, a.length);
         return fetch("//" + o.domain + "/owid/api/v1/creator",
             { mode: "cors", cache: "default" })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    var err = new Error("HTTP status code: " + response.status)
+                    err.response = response
+                    err.status = response.status
+                    throw err
+                }
+                return response.json()
+            })
             .then(c => importRsaKey(c.publicKeySPKI))
             .then(k => crypto.subtle.verify(
                 "RSASSA-PKCS1-v1_5",
@@ -365,7 +381,15 @@ owid = function (data) {
                 "host=" + encodeURIComponent(d) + "&" +
                 "returnUrl=" + encodeURIComponent(r),
                 { method: "GET", mode: "cors", cache: "no-cache" })
-                .then(r => r.text())
+                .then(r => {
+                    if (!r.ok) {
+                        var err = new Error("HTTP status code: " + r.status)
+                        err.response = r
+                        err.status = r.status
+                        throw err
+                    }
+                    return r.text();
+                })
                 .then(m => {
                     console.log(m);
                     window.location.href = m;
@@ -427,8 +451,8 @@ owid = function (data) {
                 if(depth <= maxVerifyDepth) {
                     depth++; 
                 } else {
-                    throw "Maximum depth reached, make sure provided OWIDs" + 
-                    " don't have reference loop.";
+                    throw "Maximum depth reached when parsing OWIDs, make sure" +
+                    " provided OWIDs don't have a reference loop.";
                 }
             } else {
                 depth = 1;
@@ -461,6 +485,10 @@ owid = function (data) {
          * @returns {string[]}
          */
         function getOWIDsFromString(o) {
+            if (o === undefined || o === ""){
+                throw "OWID(s) must have a value and cannot be an empty string." 
+            }
+
             var s = [];
 
             for (var i = 0; i < o.length; i++) {
@@ -494,25 +522,28 @@ owid = function (data) {
             throw `unrecognized object ${o}`;
         }
 
-        return Promise.all(getOWIDs(owids).map(o => {
-            if (typeof o === "string") {
-                if (this.data !== "") {
+        var owidList = getOWIDs(owids);
+
+        if (owidList.length > 0) {
+            return Promise.all(owidList.map(o => {
+                if (o === undefined) {
                     return verifyStringOWID(o, this.data);
+                } else if (typeof o === "string") {
+                    return verifyStringOWID(o, this.data);
+                } else if (typeof o === "object") {
+                        return verifyObjectOWID(o, this.data);
                 } else {
-                    return verifyStringOWID("", o);
+                    throw `unsupported type: ${typeof o}, supported types are 'string' and 'object'`;
                 }
-            } else if (typeof o === "object") {
-                if (this.data !== ""){
-                    return verifyObjectOWID(o, this.data);
-                } else {
-                    return verifyObjectOWID("", o);
-                }
-            } else {
-                return new Promise.reject(`unsupported type: ${typeof o}, supported types are 'string' and 'object'`);
-            }
-        }))
-            .then(r => r.reduce((a, n) => a && n, true))
+            }))
+            .then(r => r.length > 0 && r.every(v => v))
             .catch(e => console.log(e));
+        } else {
+            if (this.data === undefined || this.data === "") {
+                throw "OWID must have a value and cannot be an empty string."
+            }
+            return verifyStringOWID("", this.data);
+        }
     }
 
     //#endregion

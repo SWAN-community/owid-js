@@ -26,7 +26,9 @@ const testBadOWID =
     "gw36t85HLwL6YdV4i9kYDCdsP54RS8on/roKKASyh19TpcUQxkIRALFk";
 
 beforeEach(() => {
-    fetchMock.doMock();
+    // fetchMock.doMock();
+
+    // fetchMock.dontMock();
 
     fetchMock.mockResponse(req => {
         var urlString = req.url;
@@ -38,16 +40,22 @@ beforeEach(() => {
         if (url.pathname.endsWith("/verify")) {
             if (url.searchParams.get('owid') == testBadOWID) {
                 return Promise.resolve(JSON.stringify({valid: false}));
+            } else if (url.searchParams.get('owid') == null || url.searchParams.get('owid') == "") {
+                return Promise.resolve({
+                    status: 400,
+                    body: "Not Found"
+                  });
             } else {
                 return Promise.resolve(JSON.stringify({valid: true}));
             }
         } else {
-          return {
+          return  Promise.resolve({
             status: 404,
             body: "Not Found"
-          };
+          });
         }
     });
+    
 });
 
 test('verify OWID', () => {
@@ -127,6 +135,10 @@ test('test owid properties', () => {
     console.log(o.payloadAsString()); 
     expect(o.payloadAsString()).toBeDefined();
 
+    // Returns the payload as a string
+    console.log(o.payloadAsPrintable()); 
+    expect(o.payloadAsPrintable()).toBeDefined();
+
     // Returns the payload as a base 64 array
     console.log(o.payloadAsBase64()); 
     expect(o.payloadAsBase64()).toBeDefined();
@@ -169,4 +181,25 @@ test('verify bas actor\'s OWID', () => {
     return supplier.verify(offerId).then(valid => {
         expect(valid).toBe(false);
     }); // Verifies the supplier’s OWID that was created with the Offer ID.
+});
+
+test ('verify empty string throws error', () => {
+    var o = new owid("");
+
+    expect(() => o.verify()).toThrow();
+    expect(() => o.verify()).toThrow("OWID must have a value and cannot be an empty string.");
+});
+
+test ('verify empty string throws error', () => {
+    var o = new owid();
+
+    expect(() => o.verify("")).toThrow();
+    expect(() => o.verify("")).toThrow("OWID(s) must have a value and cannot be an empty string.");
+});
+
+test ('verify empty string throws error', () => {
+    var o = new owid(testCreatorOWID);
+
+    expect(() => o.verify("")).toThrow();
+    expect(() => o.verify("")).toThrow("OWID(s) must have a value and cannot be an empty string.");
 });
