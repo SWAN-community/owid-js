@@ -328,10 +328,20 @@ owid = function (data) {
      * Returns the payload as a string.
      * @function
      * @memberof owid
-     * @returns {string} This OWID instance payload as a string.
+     * @returns {string} This OWID instance's payload as a string.
      */
     this.payloadAsString = function () {
         return this.owid.payloadAsString();
+    }
+
+    /**
+     * Returns the payload in hexadecimal.
+     * @function
+     * @member owid
+     * @returns {string} This OWID instance's payload as a hexadecimal.
+     */
+    this.payloadAsPrintable = function () {
+        return this.owid.payloadAsPrintable();
     }
 
     /**

@@ -47,6 +47,7 @@ Methods available to call on an instance of OWID.
 |Method|Params|Return Type|Description|
 |-|-|-|-|
 |dateAsJavaScriptDate|n/a|Date|Returns the OWID creation date as a JavaScript Date object.|
+|payloadAsPrintable|n/a|string|Returns the payload in hexadecimal.|
 |payloadAsString|n/a|string|Returns the payload as a string.|
 |payloadAsBase64|n/a|string|Returns the payload as a base 64 string.|
 |verify|owid\|owids[]|Promise(bool)|The verify method determines if the OWID instance is valid. It also takes an array of other OWID instances or strings that can be turned into OWIDs to verify the current OWID against.|
