@@ -71,12 +71,20 @@ owid = function (data) {
     }
 
     /**
+     * Decode a base 64 string into a byte array.
+     * @param {string} v - an OWID tree encoded in base 64.
+     * @returns {Object} - a byte array.
+     */
+    function parseToByteArray(v) {
+        return Uint8Array.from(atob(v), c => c.charCodeAt(0));
+    }
+
+    /**
      * Parses a base 64 encoded byte array into a OWID tree.
-     * @param {*} v 
-     * @returns 
+     * @param {string} v - an OWID tree encoded in base 64.
+     * @returns {Object} - OWID tree.
      */
     function parse(v) {
-
         function readByte(b) {
             return b.array[b.index++];
         }
@@ -145,7 +153,7 @@ owid = function (data) {
         // Decode the base64 string into a byte array.
         var b = Object();
         b.index = 0;
-        b.array = Uint8Array.from(atob(v), c => c.charCodeAt(0));
+        b.array = parseToByteArray(v);
 
         // Unpack the byte array into the OWID tree.
         var q = [];
@@ -232,7 +240,7 @@ owid = function (data) {
             { method: "GET", mode: "cors", cache: "no-cache" })
             .then(r => {
                 if (!r.ok) {
-                    fetchError("Verify", r);
+                    return fetchError("Verify", r);
                 }
                 return r.json()
             })
@@ -291,7 +299,7 @@ owid = function (data) {
             { mode: "cors", cache: "default" })
             .then(response => {
                 if (!response.ok) {
-                    fetchError("Creator", response);
+                    return fetchError("Creator", response);
                 }
                 return response.json()
             })
@@ -309,10 +317,12 @@ owid = function (data) {
      * @param {Object} r - Response object
      */
     function fetchError(n, r) {
-        throw "'" + n + "' request HTTP status code: " + 
-        r.status + 
-        ". Response: " + 
-        r.text();
+        return r.text().then(text => {
+            throw "'" + n + "' request HTTP status code: " + 
+            r.status + 
+            ". Response: " + 
+            text;
+        });
     }
 
     //#endregion
@@ -389,7 +399,7 @@ owid = function (data) {
                 { method: "GET", mode: "cors", cache: "no-cache" })
                 .then(r => {
                     if (!r.ok) {
-                        fetchError("Stop", r);
+                        return fetchError("Stop", r);
                     }
                     return r.text();
                 })
@@ -525,21 +535,55 @@ owid = function (data) {
             throw `unrecognized object ${o}`;
         }
 
-        var owidList = getOWIDs(owids);
-
-        if (owidList.length > 0) {
-            return Promise.all(owidList.map(o => {
-                if (o === undefined) {
-                    return verifyStringOWID(o, this.data);
-                } else if (typeof o === "string") {
-                    return verifyStringOWID(o, this.data);
+        /**
+         * Get combined base 64 string of other owids to verify with
+         * @param {string} others - other OWIDs
+         */
+        function dataForCypto(others) {
+            var a = others.map(o => {
+                if (typeof o === "string") {
+                    return parseToByteArray(o);
                 } else if (typeof o === "object") {
-                        return verifyObjectOWID(o, this.data);
+                    return getByteArray(o);
                 } else {
                     throw `unsupported type: ${typeof o}, supported types are 'string' and 'object'`;
                 }
-            }))
-            .then(r => r.length > 0 && r.every(v => v))
+            });
+
+            var length = 0;
+            a.forEach(b => length += b.length);
+
+            var v = new Uint8Array(length);
+            var offset = 0;
+            a.forEach(b => {
+                v.set(b, offset);
+                offset += b.length;
+            });
+
+            var binary = "";
+            for (var i = 0; i < length; i++) {
+                binary += String.fromCharCode(v[i]);
+            }
+            return btoa(binary).replace(/=/g, "");
+        }
+
+        var owidList = getOWIDs(owids);
+        if (owidList.length > 0) {
+            if (this.data !== undefined && this.data !== "") {
+                var b = dataForCypto(owidList);
+                return verifyStringOWID(b, this.data);
+            } else {
+                return Promise.all(owidList.map(o => {
+                    if (typeof o === "string") {
+                        return verifyStringOWID("", o);
+                    } else if (typeof o === "object") {
+                            return verifyObjectOWID("", o);
+                    } else {
+                        throw `unsupported type: ${typeof o}, supported types are 'string' and 'object'`;
+                    }
+                }))
+                .then(r => r.length > 0 && r.every(v => v));
+            }
         } else {
             if (this.data === undefined || this.data === "") {
                 throw "OWID must have a value and cannot be an empty string."
