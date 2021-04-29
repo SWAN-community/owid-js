@@ -182,21 +182,21 @@ test('test owid properties', () => {
 // be turned into OWIDs. There are used in the order they were received to form 
 // the byte array that is used to verify the OWID. For example;
 test('verify supplier\'s OWID', () => {
-    var offerId = new owid(testCreatorOWID);
+    var impressionId = new owid(testCreatorOWID);
     var supplier = new owid(testSupplierOWID);
 
-    return supplier.verify(offerId).then(valid => {
+    return supplier.verify(impressionId).then(valid => {
         expect(valid).toBe(true);
-    }); // Verifies the supplier’s OWID that was created with the Offer ID.
+    }); // Verifies the supplier’s OWID that was created with the Impression ID.
 });
 
 test('verify bad actor\'s OWID', () => {
-    var offerId = new owid(testCreatorOWID);
+    var impressionId = new owid(testCreatorOWID);
     var supplier = new owid(testBadOWID);
 
-    return supplier.verify(offerId).then(valid => {
+    return supplier.verify(impressionId).then(valid => {
         expect(valid).toBe(false);
-    }); // Verifies the supplier’s OWID that was created with the Offer ID.
+    }); // Verifies the supplier’s OWID that was created with the Impression ID.
 });
 
 test ('verify empty string throws error', () => {

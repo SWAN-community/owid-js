@@ -78,15 +78,15 @@ o.verify()
     .catch(error => console.log(error));
 ```
 
-Verify the supplier’s OWID that was created with the Offer ID.
+Verify the supplier’s OWID that was created with the Impression ID.
 
 ```js
-var offerId = new owid("[encrypted Offer OWID]");
+var impressionId = new owid("[encrypted Impression OWID]");
 
 var supplier = new owid("[encrypted supplier OWID]");
 
 supplier
-    .verify(offerId)
+    .verify(impressionId)
     .then(valid => console.log(valid))
     .catch(error => console.log(error)); 
 ```
@@ -106,11 +106,11 @@ Verify multiple OWID instances.
 ```js
 var o = new owid("[encrypted data]");
 
-var offerId1 = new owid("[encrypted data1]");
-var offerId2 = new owid("[encrypted data2]");
-var offerId3 = new owid("[encrypted data3]");
+var impressionId1 = new owid("[encrypted data1]");
+var impressionId2 = new owid("[encrypted data2]");
+var impressionId3 = new owid("[encrypted data3]");
 
-o.verify([offerId1, offerId2, offerId3])
+o.verify([impressionId1, impressionId2, impressionId3])
     .then(valid => console.log(valid))
     .catch(error => console.log(error));
 ```
