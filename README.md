@@ -65,9 +65,10 @@ Methods available to call on an instance of OWID.
 Verify an OWID.
 
 ```js
-var o = new owid("[encrypted data]");
+var o = new owid("[signed OWID]");
  
 console.log(o.payloadAsString()); // Returns the payload as a string.
+console.log(o.payloadAsPrintable()); // Returns the payload as a hexadecimal.
 console.log(o.payloadAsBase64()); // Returns the payload as a base 64 string.
 console.log(o.domain); // Returns the creator of the OWID.
 console.log(o.date); // Returns the date and time the OWID was created in UTC as minutes since `2020-01-01 00:00`.
@@ -78,39 +79,38 @@ o.verify()
     .catch(error => console.log(error));
 ```
 
-Verify the supplier’s OWID that was created with the Impression ID.
+Verify one OWID that was signed with another OWID.
 
 ```js
-var impressionId = new owid("[encrypted Impression OWID]");
+var o = new owid("[signed OWID]");
 
-var supplier = new owid("[encrypted supplier OWID]");
+var other = new owid("[other signed OWID]");
 
-supplier
-    .verify(impressionId)
+o.verify(other)
     .then(valid => console.log(valid))
     .catch(error => console.log(error)); 
 ```
 
-Verify multiple OWID base 64 strings.
+Verify one OWID with multiple OWID base 64 strings.
 
 ```js
-var o = new owid("[encrypted data]");
+var o = new owid("[signed OWID]");
 
-o.verify(["encrypted data1", "encrypted data2", "encrypted data3"])
+o.verify(["[signed OWID 1]", "[signed OWID 2]", "[signed OWID 3]"])
     .then(valid => console.log(valid))
     .catch(error => console.log(error));
 ```
 
-Verify multiple OWID instances.
+Verify one OWID with multiple other OWID instances.
 
 ```js
-var o = new owid("[encrypted data]");
+var o = new owid("[signed OWID]");
 
-var impressionId1 = new owid("[encrypted data1]");
-var impressionId2 = new owid("[encrypted data2]");
-var impressionId3 = new owid("[encrypted data3]");
+var other1 = new owid("[signed OWID 1]");
+var other2 = new owid("[signed OWID 2]");
+var other3 = new owid("[signed OWID 3]");
 
-o.verify([impressionId1, impressionId2, impressionId3])
+o.verify([other1, other2, other3])
     .then(valid => console.log(valid))
     .catch(error => console.log(error));
 ```
