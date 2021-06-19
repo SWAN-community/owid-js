@@ -249,16 +249,22 @@ owid = function (data) {
      * @returns {Promise} Promise resolves to true if OWID is valid.
      */
     function verifyOWIDObjectWithAPI(p, t, o) {
-        return fetch("//" + o.domain +
-            "/owid/api/v" + o.version + "/verify" +
-            "?parent=" + encodeURIComponent(p) +
-            "&owid=" + encodeURIComponent(t),
-            { method: "GET", mode: "cors", cache: "no-cache" })
+        var data = new URLSearchParams();
+        data.append("parent", p);
+        data.append("owid", t);
+        var url = "//" + o.domain + "/owid/api/v" + o.version + "/verify";
+        return fetch(url,
+            { 
+                method: "POST",
+                mode: "cors", 
+                cache: "no-cache",
+                body: data 
+            })
             .then(r => {
-                if (!r.ok) {
-                    return fetchError("Verify", r);
+                if (r.ok) {
+                    return r.json();
                 }
-                return r.json()
+                return fetchError("Verify", r);
             })
             .then(r => r.valid);
     }
@@ -306,25 +312,29 @@ owid = function (data) {
      * @returns {Promise} Promise resolves to true if OWID is valid.
      */
     function verifyOWIDObjectWithPublicKey(r, o) {
-        var a = getByteArray(o);
-        var b = Uint8Array.from(atob(r), c => c.charCodeAt(0));
-        var m = new Uint8Array(a.length + b.length);
-        m.set(a);
-        m.set(b, a.length);
-        return fetch("//" + o.domain + "/owid/api/v1/creator",
+        var url = "//" + o.domain + "/owid/api/v1/creator";
+        return fetch(
+            url,
             { mode: "cors", cache: "default" })
-            .then(response => {
-                if (!response.ok) {
-                    return fetchError("Creator", response);
+            .then(r => {
+                if (r.ok) {
+                    return r.json()    
                 }
-                return response.json()
+                return fetchError("Creator", r);
             })
             .then(c => importRsaKey(c.publicKeySPKI))
-            .then(k => crypto.subtle.verify(
-                "RSASSA-PKCS1-v1_5",
-                k,
-                o.signature,
-                m));
+            .then(k => {
+                var a = getByteArray(o);
+                var b = Uint8Array.from(atob(r), c => c.charCodeAt(0));
+                var m = new Uint8Array(a.length + b.length);
+                m.set(a);
+                m.set(b, a.length);                
+                return crypto.subtle.verify(
+                    "RSASSA-PKCS1-v1_5",
+                    k,
+                    o.signature,
+                    m);
+            });
     }
 
     /**
@@ -408,25 +418,31 @@ owid = function (data) {
      * @param {string} d - organization domain.
      * @param {string} r - return url
      */
-         this.stop = function (s, d, r) {
-            fetch("/stop?" +
-                "host=" + encodeURIComponent(d) + "&" +
-                "returnUrl=" + encodeURIComponent(r),
-                { method: "GET", mode: "cors", cache: "no-cache" })
-                .then(r => {
-                    if (!r.ok) {
-                        return fetchError("Stop", r);
-                    }
-                    return r.text();
-                })
-                .then(m => {
-                    console.log(m);
-                    window.location.href = m;
-                })
-                .catch(x => {
-                    console.log(x);
-                });
-        }
+    this.stop = function (s, d, r) {
+        var data = new URLSearchParams();
+        data.append("host", d);
+        data.append("returnUrl", r);
+        fetch("/stop",
+            {
+                method: "POST",
+                mode: "cors", 
+                cache: "no-cache",
+                body: data
+            })
+            .then(r => {
+                if (r.ok) {
+                    return r.text();    
+                }
+                return fetchError("Stop", r);
+            })
+            .then(m => {
+                console.log(m);
+                window.location.href = m;
+            })
+            .catch(x => {
+                console.log(x);
+            });
+    }
 
     /**
      * Verify the OWID of this instance and optionally any other OWIDs provided.
@@ -580,7 +596,7 @@ owid = function (data) {
             for (var i = 0; i < length; i++) {
                 binary += String.fromCharCode(v[i]);
             }
-            return btoa(binary).replace(/=/g, "");
+            return btoa(binary);
         }
 
         var owidList = getOWIDs(owids);
