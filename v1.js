@@ -68,6 +68,13 @@ owid = function (data) {
     // multiple OWIDs.
     const maxVerifyDepth = 3;
 
+    // Used to importing PEM keys and verification.
+    const ECDSA = {
+        name: "ECDSA",
+        namedCurve: "P-256",
+        hash: { name: "SHA-256" }
+    }
+    
     //#endregion 
 
     //#region private functions
@@ -134,7 +141,7 @@ owid = function (data) {
                 var l = readByte(b);
                 return (h >> 8 | l) * 24 * 60;
             }
-            if (v == 2) {
+            if (v == 2 || v == 3) {
                 return readUint32(b);
             }
         }
@@ -280,14 +287,14 @@ owid = function (data) {
         return verifyOWIDObjectWithPublicKey(r, o);
     }
 
-    function importRsaKey(pem) {
+    function importEcdsaKey(pem) {
         // Remove the header, footer and line breaks to get the PEM content.
         var lines = pem.split('\n');
         var pemContents = '';
         for (var i = 0; i < lines.length; i++) {
             if (lines[i].trim().length > 0 &&
-                lines[i].indexOf('-----BEGIN RSA PUBLIC KEY-----') < 0 &&
-                lines[i].indexOf('-----END RSA PUBLIC KEY-----') < 0) {
+                lines[i].indexOf('-----BEGIN PUBLIC KEY-----') < 0 &&
+                lines[i].indexOf('-----END PUBLIC KEY-----') < 0) {
                 pemContents += lines[i].trim();
             }
         }
@@ -296,10 +303,7 @@ owid = function (data) {
         return window.crypto.subtle.importKey(
             "spki",
             Uint8Array.from(atob(pemContents), c => c.charCodeAt(0)),
-            {
-                name: "RSASSA-PKCS1-v1_5",
-                hash: "SHA-256"
-            },
+            ECDSA,
             false,
             ["verify"]
         );
@@ -322,7 +326,7 @@ owid = function (data) {
                 }
                 return fetchError("Creator", r);
             })
-            .then(c => importRsaKey(c.publicKeySPKI))
+            .then(c => importEcdsaKey(c.publicKeySPKI))
             .then(k => {
                 var a = getByteArray(o);
                 var b = Uint8Array.from(atob(r), c => c.charCodeAt(0));
@@ -330,7 +334,7 @@ owid = function (data) {
                 m.set(a);
                 m.set(b, a.length);                
                 return crypto.subtle.verify(
-                    "RSASSA-PKCS1-v1_5",
+                    ECDSA,
                     k,
                     o.signature,
                     m);
