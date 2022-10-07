@@ -1,9 +1,11 @@
 ![Open Web Id](https://github.com/SWAN-community/owid/raw/main/images/owl.128.pxls.100.dpi.png)
 
-# Open Web Id (OWID) JavaScript
+# TODO: Update to reflect revised public interface and functions #
+
+# Open Web Id (OWID) ~~JavaScript~~
 
 Open Web Id (OWID) - a open source cryptographically secure shared web identifier 
-schema implemented in JavaScript
+schema implemented in JavaScript and TypeScript
 
 Read the [OWID](https://github.com/SWAN-community/owid) project to learn more about
 the concepts before looking into this implementation.
@@ -24,7 +26,7 @@ To use OWID-js:
     ```
 ## Interface
 
-OWID-js library is used to construct owid objects and verify against other 
+OWID-js library is used to construct OWID objects and verify against other 
 instances of OWID or base 64 encoded strings representing OWID trees.
 
 ### Constructor
