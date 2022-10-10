@@ -16,7 +16,7 @@
 
 // PrivateKey associated with the signer at a given point in time.
 export interface PrivateKey {
-	key: string // The private key in PEM format
-	created: Date // The date and time that the key was created
-	cryptoKey?: CryptoKey // The crypto version of the key
+	key: string; // The private key in PEM format
+	created: Date; // The date and time that the key was created
+	cryptoKey?: CryptoKey; // The crypto version of the key
 }

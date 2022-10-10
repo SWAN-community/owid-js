@@ -18,7 +18,7 @@ import { Signer } from './signer';
 import { DateHelper } from './dateHelper';
 import { Io } from './io';
 import { Crypto } from './crypto';
-import { PublicKey } from './publicKey';
+import { getCreatedDate, PublicKey } from './publicKey';
 import { SignerCache } from './signerCache';
 import { PrivateKey } from './privateKey';
 
@@ -32,23 +32,36 @@ export interface OWIDTarget {
 }
 
 /**
+ * Interface used for serialization.
+ */
+export interface IOWID {
+    version: number; // The byte version of the OWID.
+    domain: string; // Domain associated with the signer.
+    timestamp: number; // The date and time to the nearest minute in UTC that the OWID was signed.
+    signature: string; // Signature for this OWID and the data returned from the target.
+}
+
+/**
  * The OWID class and instance of which is contained in target data structures.
  */
-export class OWID<T extends OWIDTarget> {
+export class OWID<T extends OWIDTarget> implements IOWID {
     
     public version: number; // The byte version of the OWID.
     public domain: string; // Domain associated with the signer.
-    public timeStamp: number; // The date and time to the nearest minute in UTC that the OWID was signed.
-    public signature: Uint8Array; // Signature for this OWID and the data returned from the target.
-    public target: T; // The target that the OWID relates to.
+    public timestamp: number; // The date and time to the nearest minute in UTC that the OWID was signed.
+    public signature: string; // Signature for this OWID and the data returned from the target.
     private timeStampAsDate: Date; // The date and time that the OWID was signed. Populated by getTimeStamp().
+    private signatureArray: Uint8Array; // The signature as a byte array.
 
     /**
-     * Constructs a new instance of an OWID.
-     * @param domain for the signer of the OWID
+     * Constructs a new instance of an OWID from the source if provided.
+     * @param source
+     * @param target that the OWID relates to.
      */
-    constructor(domain?: string) {
-        this.domain = domain;
+    constructor(private readonly target: T, source?: IOWID) {
+        if (source) {
+            Object.assign(this, source);
+        }
     }
 
     /**
@@ -57,10 +70,11 @@ export class OWID<T extends OWIDTarget> {
      * @param cryptoKey the private key instance
      */
     public async signWithCryptoKey(cryptoKey: CryptoKey): Promise<void> {
-        this.timeStamp = DateHelper.getDateInMinutes(new Date());
+        this.timestamp = DateHelper.getDateInMinutes(new Date());
         const data = Uint8Array.from(this.addTargetAndOwidData([]));
         const buffer = await Crypto.sign(cryptoKey, data);
-        this.signature = new Uint8Array(buffer);
+        this.signatureArray = new Uint8Array(buffer);
+        // TODO: Update the string version.
     }
 
     /**
@@ -97,7 +111,7 @@ export class OWID<T extends OWIDTarget> {
      */
     public async verifyWithCrypto(key: CryptoKey): Promise<boolean> {
         const data = Uint8Array.from(this.addTargetAndOwidData([]));
-        return Crypto.verify(key, this.signature, data);
+        return Crypto.verify(key, this.getSignatureArray(), data);
     }
 
     /**
@@ -113,14 +127,15 @@ export class OWID<T extends OWIDTarget> {
     }
 
     /**
-     * Chooses public keys created on or after the timestamp in the OWID to determine if any of then can verify the 
+     * Chooses public keys created on or before the timestamp in the OWID to determine if any of then can verify the 
      * signature. 
      * @param keys one or more public keys
      */
     public async verifyWithPublicKeys(keys: PublicKey[]): Promise<boolean> {
+        const time = this.getTimeStamp().getTime();
         for(let i = 0; i < keys.length; i++) {
             const key = keys[i];
-            if (key.created >= this.getTimeStamp()) {
+            if (time >= getCreatedDate(key).getTime()) {
                 if (await this.verifyWithPublicKey(key)) {
                     return true;
                 }
@@ -162,7 +177,7 @@ export class OWID<T extends OWIDTarget> {
         if (this.target) {
             this.target.addOwidData(b);
             Io.writeString(b, this.domain);
-            Io.writeUint32(b, this.timeStamp);
+            Io.writeUint32(b, this.timestamp);
             return b;
         }
         throw new Error('target must be set');
@@ -175,8 +190,31 @@ export class OWID<T extends OWIDTarget> {
      */
     public getTimeStamp(): Date {
         if (!this.timeStampAsDate) {
-            this.timeStampAsDate = DateHelper.getDateFromMinutes(this.timeStamp);
+            this.timeStampAsDate = DateHelper.getDateFromMinutes(this.timestamp);
         }
         return this.timeStampAsDate;
+    }
+
+    /**
+     * Returns the signature as an array.
+     * @returns signature array
+     */
+    public getSignatureArray(): Uint8Array {
+        if (!this.signatureArray) {
+            this.signatureArray =  Uint8Array.from(atob(this.signature), c => c.charCodeAt(0));
+        }
+        return this.signatureArray;
+    }
+
+    /**
+     * A fresh instance of the interface for serialization.
+     * @returns 
+     */
+    public asInterface(): IOWID {
+        return {
+            version: this.version,
+            domain: this.domain,
+            signature: this.signature,
+            timestamp: this.timestamp};
     }
 }

@@ -3,7 +3,7 @@
     "esModuleInterop": true,
     "target": "ES6",
     "lib": ["dom"],
-    "typeRoots": ["./node_modules/@types", "./src/types"],
+    "types": ["node", "jest"],
     "paths": {
       "@owid/*": ["./src/*"]
     }

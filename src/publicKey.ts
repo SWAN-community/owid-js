@@ -16,7 +16,20 @@
 
 // PublicKey associated with the signer at a given point in time.
 export interface PublicKey {
-	key: string // The public key in PEM format
-	created: Date // The date and time that the key was created
-	cryptoKey?: CryptoKey // The crypto version of the key
+	key: string; // The public key in PEM format
+	created: string; // The date and time that the key was created as a string
+	createdDate: Date;// Date time instance of the created value
+	cryptoKey?: CryptoKey; // The crypto version of the key
 }
+
+/**
+ * Gets the created date of the public key as a date type.
+ * @param publicKey 
+ * @returns 
+ */
+export const getCreatedDate = (publicKey: PublicKey): Date => {
+	if (!publicKey.createdDate) {
+		publicKey.createdDate = new Date(Date.parse(publicKey.created));
+	}
+	return publicKey.createdDate;
+};

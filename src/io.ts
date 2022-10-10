@@ -17,7 +17,8 @@
 export class Io {
 
     // The base year for all dates encoded with the io time methods.
-    public static readonly dateBase = new Date(2020, 1,1,0,0,0,0);
+    // Must be aligned across implementations.
+    public static readonly dateBase = new Date(2020,0,1,0,0,0,0);
 
     public static writeByte(b: number[], v: number): number {
         if (v < 0 || v > 255) {

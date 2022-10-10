@@ -24,8 +24,8 @@ export class Artifact {
   constructor() {
     this.target = new Data();
     this.target.value = Artifact.testValue;
-    this.target.owid = new OWID<Data>(Artifact.testDomain);
-    this.target.owid.target = this.target;
+    this.target.owid = new OWID<Data>(this.target);
+    this.target.owid.domain = Artifact.testDomain;
   }
 
   public async init(): Promise<Artifact> {
@@ -37,8 +37,9 @@ export class Artifact {
       name: Artifact.testName,
       termsURL: `${Artifact.testDomain}/terms.html`,
       email: `${Artifact.testName}@${Artifact.testDomain}`,
-      publicKeys: [{ 
-        created: this.target.owid.getTimeStamp(), 
+      publicKeys: [{
+        created: this.target.owid.getTimeStamp().toUTCString(),
+        createdDate: this.target.owid.getTimeStamp(), 
         key: await Crypto.exportKey(this.keys.publicKey),
         cryptoKey: this.keys.publicKey }],
       // Private keys can't be exported.
@@ -88,7 +89,7 @@ describe('testing public keys', () => {
     const a = await createArtifactWithVerifiedOWID();
     const time = a.target.owid.getTimeStamp().getTime();
     const r2 = await a.target.owid.verifyWithPublicKeys(
-      [{ key: a.signer.publicKeys[0].key, created: new Date(time) }]);
+      [{ key: a.signer.publicKeys[0].key, created: new Date(time).toUTCString(), createdDate: new Date(time) }]);
     expect(r2).toBe(true);
   });
   test('public keys multiple one valid', async () => {
@@ -97,9 +98,9 @@ describe('testing public keys', () => {
     const time = a.target.owid.getTimeStamp().getTime();
     const r2 = await a.target.owid.verifyWithPublicKeys(
       [
-        { key: a.signer.publicKeys[0].key, created: new Date(time - 1) },
-        { key: other.signer.publicKeys[0].key, created: new Date(time + 1) },
-        { key: a.signer.publicKeys[0].key, created: new Date(time + 2) }
+        { key: a.signer.publicKeys[0].key, createdDate: new Date(time - 1) },
+        { key: other.signer.publicKeys[0].key, createdDate: new Date(time + 1) },
+        { key: a.signer.publicKeys[0].key, createdDate: new Date(time + 2) }
       ]);
     expect(r2).toBe(true);
   });
@@ -155,7 +156,7 @@ describe('testing owid', () => {
   });
   test('corrupt time', async () => {
     const a = await new Artifact().init();
-    a.target.owid.timeStamp += 1;
+    a.target.owid.timestamp += 1;
     const r = await a.target.owid.verifyWithCrypto(a.keys.publicKey);
     expect(r).toBe(false);
   });

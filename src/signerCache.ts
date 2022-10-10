@@ -60,10 +60,27 @@ export class SignerCacheMap implements SignerCache {
  * Returns the signer using an HTTP request to the host if the entry is not available in the cache.
  */
 export class SignerCacheHttp implements SignerCache {
+    
   /**
    * Cache of responses found so far.
    */
   private readonly map = new Map<Key, Signer>();
+
+  /**
+   * Protocol to use when fetching signer information.
+   */
+  private readonly protocol: string;
+
+  /**
+   * A new HTTP backed cache of signer information.
+   * If there is a window object and it has a location then use the protocol from there. Otherwise use https.
+   */
+  constructor() {
+    this.protocol = window?.location?.protocol;
+    if (!this.protocol) {
+      this.protocol = 'https:';
+    }
+  }
 
   /**
    * Returns the signer for the OWID, or null if the OWID has no signer.
@@ -72,8 +89,8 @@ export class SignerCacheHttp implements SignerCache {
    */
   public async get<T extends OWIDTarget>(owid: OWID<T>): Promise<Signer> {
     let signer = this.map.get(owid);
-    if (signer === null) {
-      const response = await fetch(`https://${owid.domain}/owid/api/v{${owid.version}/signer`, {
+    if (!signer) {
+      const response = await fetch(`${this.protocol}//${owid.domain}/owid/api/v${owid.version}/signer`, {
         method: 'GET',
         mode: 'cors',
         cache: 'default',
