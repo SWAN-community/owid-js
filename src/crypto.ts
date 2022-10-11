@@ -14,6 +14,10 @@
  * under the License.
  * ***************************************************************************/
 
+import * as crypto from 'crypto';
+
+const { subtle } = crypto.webcrypto;
+
 type PemType = Exclude<KeyType, 'secret'>;
 
 export class Crypto {
@@ -26,12 +30,12 @@ export class Crypto {
     };
 
     /**
-     * Creates a public and private key pair for signing and verification. The keys can be exported for storage in PEM
-     * or other formats.
+     * Creates a public and private key pair for signing and verification. 
+     * The keys can be exported for storage in PEM or other formats.
      * @returns a pair of private and public keys
      */
     public static async generateKeys(): Promise<CryptoKeyPair> {
-        return crypto.subtle.generateKey(Crypto.ECDSA, true, ['sign', 'verify']);
+        return subtle.generateKey(Crypto.ECDSA, true, ['sign', 'verify']);
     }
 
     /**
@@ -42,7 +46,7 @@ export class Crypto {
      */
     public static async sign(key: CryptoKey, data: Uint8Array): Promise<Uint8Array> {
         if (key.usages.find((i) => 'sign' === i)) {
-            return new Uint8Array(await crypto.subtle.sign(Crypto.ECDSA, key, data.buffer));
+            return new Uint8Array(await subtle.sign(Crypto.ECDSA, key, data.buffer));
         }
         throw new Error('key does not support sign');
     }
@@ -54,9 +58,12 @@ export class Crypto {
      * @param data
      * @returns true if the signature matches the data, otherwise false
      */
-    public static async verify(key: CryptoKey, signature: Uint8Array, data: Uint8Array): Promise<boolean> {
+    public static async verify(
+        key: CryptoKey, 
+        signature: Uint8Array, 
+        data: Uint8Array): Promise<boolean> {
         if (key.usages.find((i) => 'verify' === i)) {
-            return crypto.subtle.verify(Crypto.ECDSA, key, signature, data);
+            return subtle.verify(Crypto.ECDSA, key, signature, data);
         }
         throw new Error('key does not support verify');
     }
@@ -68,7 +75,7 @@ export class Crypto {
      */
     public static async exportKey(key: CryptoKey): Promise<string> {
         const type = key.type.toUpperCase();
-        const k = new Uint8Array(await crypto.subtle.exportKey('spki', key));
+        const k = new Uint8Array(await subtle.exportKey('spki', key));
         let b = '';
         for (let i = 0; i < k.length; i++) {
             b += String.fromCharCode(k[i]);
@@ -100,7 +107,7 @@ export class Crypto {
      * @returns 
      */
      public static importPublicKey(pem: string): Promise<CryptoKey> {
-        return crypto.subtle.importKey(
+        return subtle.importKey(
             'spki',
             Crypto.getPemByteArray(pem, 'public'),
             Crypto.ECDSA,
@@ -115,7 +122,7 @@ export class Crypto {
      * @returns a new instance of a crypto key configured for signing OWIDs
      */
     public static importPrivateKey(pem: string): Promise<CryptoKey> {
-        return crypto.subtle.importKey(
+        return subtle.importKey(
             'spki',
             Crypto.getPemByteArray(pem, 'private'),
             Crypto.ECDSA,

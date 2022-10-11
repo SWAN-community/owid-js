@@ -3,6 +3,7 @@ import { Crypto } from '@owid/crypto';
 import { SignerCacheMap } from '@owid/signerCache';
 import { Signer } from '@owid/signer';
 import { Data } from './data';
+import { PublicKey } from '@owid/publicKey';
 
 export class Artifact {
 
@@ -37,16 +38,16 @@ export class Artifact {
       name: Artifact.testName,
       termsURL: `${Artifact.testDomain}/terms.html`,
       email: `${Artifact.testName}@${Artifact.testDomain}`,
-      publicKeys: [{
-        created: this.target.owid.getTimeStamp().toUTCString(),
-        createdDate: this.target.owid.getTimeStamp(), 
-        key: await Crypto.exportKey(this.keys.publicKey),
-        cryptoKey: this.keys.publicKey }],
+      publicKeys: [new PublicKey(
+        await Crypto.exportKey(this.keys.publicKey),
+        this.target.owid.timeStampDate)],
       // Private keys can't be exported.
-      privateKeys: [{ 
-        created: this.target.owid.getTimeStamp(), 
+      privateKeys: [{
+        created: this.target.owid.timeStampDate,
         key: '',
-        cryptoKey: this.keys.privateKey }]};
+        cryptoKey: this.keys.privateKey
+      }]
+    };
     return this;
   }
 }
@@ -55,7 +56,7 @@ export class Artifact {
  * Creates a test artifact checking that the OWID is verified.
  * @returns the test artifact
  */
- export async function createArtifactWithVerifiedOWID() {
+export async function createArtifactWithVerifiedOWID() {
   const a = await new Artifact().init();
   const r1 = await a.target.owid.verifyWithCrypto(a.keys.publicKey);
   expect(r1).toBe(true);
@@ -73,7 +74,10 @@ describe('testing cache', () => {
   test('fail', async () => {
     const a = await new Artifact().init();
     const c = new SignerCacheMap(0);
-    c.map.set({ domain: 'not.found', version: a.target.owid.version }, a.signer);
+    c.map.set({ 
+      domain: 'not.found', 
+      version: a.target.owid.version }, 
+      a.signer);
     const r = await a.target.owid.verifyWithCache(c);
     expect(r).toBe(false);
   });
@@ -87,56 +91,56 @@ describe('testing public keys', () => {
   });
   test('public keys single', async () => {
     const a = await createArtifactWithVerifiedOWID();
-    const time = a.target.owid.getTimeStamp().getTime();
+    const time = a.target.owid.timeStampDate.getTime();
     const r2 = await a.target.owid.verifyWithPublicKeys(
-      [{ key: a.signer.publicKeys[0].key, created: new Date(time).toUTCString(), createdDate: new Date(time) }]);
+      [new PublicKey(a.signer.publicKeys[0].key, new Date(time))]);
     expect(r2).toBe(true);
   });
   test('public keys multiple one valid', async () => {
     const a = await createArtifactWithVerifiedOWID();
     const other = await createArtifactWithVerifiedOWID();
-    const time = a.target.owid.getTimeStamp().getTime();
+    const time = a.target.owid.timeStampDate.getTime();
     const r2 = await a.target.owid.verifyWithPublicKeys(
       [
-        { key: a.signer.publicKeys[0].key, createdDate: new Date(time - 1) },
-        { key: other.signer.publicKeys[0].key, createdDate: new Date(time + 1) },
-        { key: a.signer.publicKeys[0].key, createdDate: new Date(time + 2) }
+        new PublicKey(a.signer.publicKeys[0].key, new Date(time - 1)),
+        new PublicKey(other.signer.publicKeys[0].key, new Date(time + 1)),
+        new PublicKey(a.signer.publicKeys[0].key, new Date(time + 2))
       ]);
     expect(r2).toBe(true);
   });
   test('public keys multiple past valid', async () => {
     const a = await createArtifactWithVerifiedOWID();
     const other = await createArtifactWithVerifiedOWID();
-    const time = a.target.owid.getTimeStamp().getTime();
+    const time = a.target.owid.timeStampDate.getTime();
     const r2 = await a.target.owid.verifyWithPublicKeys(
       [
-        { key: a.signer.publicKeys[0].key, created: new Date(time - 1) },
-        { key: other.signer.publicKeys[0].key, created: new Date(time + 1) },
-        { key: other.signer.publicKeys[0].key, created: new Date(time + 2) }
+        new PublicKey(a.signer.publicKeys[0].key, new Date(time - 1)),
+        new PublicKey(other.signer.publicKeys[0].key, new Date(time + 1)),
+        new PublicKey(other.signer.publicKeys[0].key, new Date(time + 2))
       ]);
-    expect(r2).toBe(false);
+    expect(r2).toBe(true);
   });
   test('public keys multiple future valid', async () => {
     const a = await createArtifactWithVerifiedOWID();
     const other = await createArtifactWithVerifiedOWID();
-    const time = a.target.owid.getTimeStamp().getTime();
+    const time = a.target.owid.timeStampDate.getTime();
     const r2 = await a.target.owid.verifyWithPublicKeys(
       [
-        { key: a.signer.publicKeys[0].key, created: new Date(time - 1) },
-        { key: other.signer.publicKeys[0].key, created: new Date(time + 1) },
-        { key: a.signer.publicKeys[0].key, created: new Date(time + 2) }
+        new PublicKey(other.signer.publicKeys[0].key, new Date(time - 1)),
+        new PublicKey(other.signer.publicKeys[0].key, new Date(time + 1)),
+        new PublicKey(a.signer.publicKeys[0].key, new Date(time + 2))
       ]);
-    expect(r2).toBe(true);
+    expect(r2).toBe(false);
   });
   test('public keys multiple all other', async () => {
     const a = await createArtifactWithVerifiedOWID();
     const other = await createArtifactWithVerifiedOWID();
-    const time = a.target.owid.getTimeStamp().getTime();
+    const time = a.target.owid.timeStampDate.getTime();
     const r2 = await a.target.owid.verifyWithPublicKeys(
       [
-        { key: other.signer.publicKeys[0].key, created: new Date(time - 1) },
-        { key: other.signer.publicKeys[0].key, created: new Date(time + 1) },
-        { key: other.signer.publicKeys[0].key, created: new Date(time + 2) }
+        new PublicKey(other.signer.publicKeys[0].key, new Date(time - 1)),
+        new PublicKey(other.signer.publicKeys[0].key, new Date(time + 1)),
+        new PublicKey(other.signer.publicKeys[0].key, new Date(time + 2))
       ]);
     expect(r2).toBe(false);
   });
