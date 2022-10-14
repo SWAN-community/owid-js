@@ -1,4 +1,5 @@
 import { OWID, OWIDTarget } from './owid';
+import { PublicKey } from './publicKey';
 import { Signer } from './signer';
 
 /**
@@ -97,6 +98,14 @@ export class SignerCacheHttp implements SignerCache {
       });
       if (response) {
         signer = await response.json();
+
+        // Turn the anonymous interface into a concrete instance of the class.
+        const k: PublicKey[] = [];
+        signer.publicKeys.forEach(i => {
+          k.push(new PublicKey(i.key, i.created));
+        });
+        signer.publicKeys = k;
+        
         this.map.set(owid, signer);
       } else {
         throw new Error(response.statusText);

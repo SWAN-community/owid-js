@@ -17,24 +17,24 @@
 // PublicKey associated with the signer at a given point in time.
 export class PublicKey {
 	key: string; // The public key in PEM format
-	createdDate: Date;// Date time instance of the created value
+	created: string; // Date time instance of the created value
 	cryptoKey?: CryptoKey; // The crypto version of the key
 
 	/**
 	 * Parameters optional to enable JSON serialization.
 	 * @param key public key in PEM format
-	 * @param createdDate date the key created
+	 * @param created date the key created
 	 */
-	constructor(key?: string, createdDate?: Date) {
+	constructor(key?: string, created?: string) {
 		this.key = key;
-		this.createdDate = createdDate;
+		this.created = created;
 	}
 
 	// The date and time that the key was created as a string
-	get created(): string {
-		return this.createdDate.toUTCString();
+	get createdDate(): Date {
+		return new Date(Date.parse(this.created));
 	}
-	set create(value: string) {
-		this.createdDate = new Date(Date.parse(value));
+	set createdDate(value: Date) {
+		this.created = value.toLocaleString();
 	}
 }
