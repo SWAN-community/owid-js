@@ -1,9 +1,9 @@
-import { OWID } from '@owid/owid';
-import { Crypto } from '@owid/crypto';
-import { SignerCacheMap } from '@owid/signerCache';
-import { Signer } from '@owid/signer';
+import { OWID } from '../src/owid';
+import { Crypto } from '../src/crypto';
+import { SignerCacheMap } from '../src/signerCache';
+import { Signer } from '../src/signer';
 import { Data } from './data';
-import { PublicKey } from '@owid/publicKey';
+import { PublicKey } from '../src/publicKey';
 
 export class Artifact {
 
@@ -93,7 +93,7 @@ describe('testing public keys', () => {
     const a = await createArtifactWithVerifiedOWID();
     const time = a.target.owid.timeStampDate.getTime();
     const r2 = await a.target.owid.verifyWithPublicKeys(
-      [new PublicKey(a.signer.publicKeys[0].key, new Date(time))]);
+      [new PublicKey(a.signer.publicKeys[0].key, time)]);
     expect(r2).toBe(true);
   });
   test('public keys multiple one valid', async () => {
@@ -102,9 +102,9 @@ describe('testing public keys', () => {
     const time = a.target.owid.timeStampDate.getTime();
     const r2 = await a.target.owid.verifyWithPublicKeys(
       [
-        new PublicKey(a.signer.publicKeys[0].key, new Date(time - 1)),
-        new PublicKey(other.signer.publicKeys[0].key, new Date(time + 1)),
-        new PublicKey(a.signer.publicKeys[0].key, new Date(time + 2))
+        new PublicKey(a.signer.publicKeys[0].key, time - 1),
+        new PublicKey(other.signer.publicKeys[0].key, time + 1),
+        new PublicKey(a.signer.publicKeys[0].key, time + 2)
       ]);
     expect(r2).toBe(true);
   });
@@ -114,9 +114,9 @@ describe('testing public keys', () => {
     const time = a.target.owid.timeStampDate.getTime();
     const r2 = await a.target.owid.verifyWithPublicKeys(
       [
-        new PublicKey(a.signer.publicKeys[0].key, new Date(time - 1)),
-        new PublicKey(other.signer.publicKeys[0].key, new Date(time + 1)),
-        new PublicKey(other.signer.publicKeys[0].key, new Date(time + 2))
+        new PublicKey(a.signer.publicKeys[0].key, time - 1),
+        new PublicKey(other.signer.publicKeys[0].key, time + 1),
+        new PublicKey(other.signer.publicKeys[0].key, time + 2)
       ]);
     expect(r2).toBe(true);
   });
@@ -126,9 +126,11 @@ describe('testing public keys', () => {
     const time = a.target.owid.timeStampDate.getTime();
     const r2 = await a.target.owid.verifyWithPublicKeys(
       [
-        new PublicKey(other.signer.publicKeys[0].key, new Date(time - 1)),
-        new PublicKey(other.signer.publicKeys[0].key, new Date(time + 1)),
-        new PublicKey(a.signer.publicKeys[0].key, new Date(time + 2))
+        new PublicKey(other.signer.publicKeys[0].key, time - 1),
+        new PublicKey(other.signer.publicKeys[0].key, time + 1),
+        // Add two hours in the future to ensure the clock different checks are
+        // not applied to match the future key.
+        new PublicKey(a.signer.publicKeys[0].key, time + 60 * 60 * 1000 * 2)
       ]);
     expect(r2).toBe(false);
   });
@@ -138,9 +140,9 @@ describe('testing public keys', () => {
     const time = a.target.owid.timeStampDate.getTime();
     const r2 = await a.target.owid.verifyWithPublicKeys(
       [
-        new PublicKey(other.signer.publicKeys[0].key, new Date(time - 1)),
-        new PublicKey(other.signer.publicKeys[0].key, new Date(time + 1)),
-        new PublicKey(other.signer.publicKeys[0].key, new Date(time + 2))
+        new PublicKey(other.signer.publicKeys[0].key, time - 1),
+        new PublicKey(other.signer.publicKeys[0].key, time + 1),
+        new PublicKey(other.signer.publicKeys[0].key, time + 2)
       ]);
     expect(r2).toBe(false);
   });

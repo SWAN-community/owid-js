@@ -187,14 +187,19 @@ export class OWID<T extends OWIDTarget> implements IOWID {
 
     /**
      * Chooses public keys created on or before the timestamp in the OWID to 
-     * determine if any of then can verify the signature. 
+     * determine if any of then can verify the signature. A one hour tolerance
+     * is used for the time stamp check to handle clock differences between 
+     * difference environments.
      * @param keys one or more public keys
      */
     public async verifyWithPublicKeys(keys: PublicKey[]): Promise<boolean> {
         const time = this.timeStampDate.getTime();
         for(let i = 0; i < keys.length; i++) {
             const key = keys[i];
-            if (time >= key.createdDate.getTime()) {
+            // Take 1 hour from the created time to handle any clock differences
+            // between participants.
+            const created = key.createdDate.getTime() - 60 * 60 * 1000;
+            if (time >= created) {
                 if (await this.verifyWithPublicKey(key)) {
                     return true;
                 }
