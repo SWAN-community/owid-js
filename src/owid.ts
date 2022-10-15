@@ -242,6 +242,7 @@ export class OWID<T extends OWIDTarget> implements IOWID {
     public addTargetAndOwidData(b: number[]): number[] {
         if (this.target) {
             this.target.addOwidData(b);
+            Io.writeByte(b, this.version);
             Io.writeString(b, this.domain);
             Io.writeUint32(b, this.timestamp);
             return b;
