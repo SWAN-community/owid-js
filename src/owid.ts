@@ -158,6 +158,7 @@ export class OWID<T extends OWIDTarget> implements IOWID {
             }
         }
         if (newest) {
+            this.domain = signer.domain;
             this.signWithPemKey(newest.key);
         }
     }   
@@ -242,6 +243,9 @@ export class OWID<T extends OWIDTarget> implements IOWID {
     public addTargetAndOwidData(b: number[]): number[] {
         if (this.target) {
             this.target.addOwidData(b);
+            if (!this.domain) {
+                throw new Error('domain must be present');
+            }
             Io.writeString(b, this.domain);
             Io.writeUint32(b, this.timestamp);
             return b;
