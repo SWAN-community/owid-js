@@ -95,6 +95,13 @@ export class OWID<T extends OWIDTarget> implements IOWID {
         }
     }
 
+    public toByteArray(b: number[]) {
+        Io.writeByte(b, this.version);
+        Io.writeString(b, this.domain);
+        Io.writeDate(b, this.timestamp);
+        Io.writeSignature(b, this.signatureArray);
+    }
+
     /**
      * Set the members of this instance from the byte array reader provided.
      * @param array 
@@ -246,6 +253,7 @@ export class OWID<T extends OWIDTarget> implements IOWID {
             if (!this.domain) {
                 throw new Error('domain must be present');
             }
+            Io.writeByte(b, this.version);
             Io.writeString(b, this.domain);
             Io.writeUint32(b, this.timestamp);
             return b;
