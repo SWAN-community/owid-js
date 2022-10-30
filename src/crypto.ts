@@ -137,7 +137,11 @@ export class Crypto {
      * @returns byte array containing the key
      */
     private static getPemByteArray(pem: string, type: PemType): Uint8Array {
-        return Uint8Array.from(atob(Crypto.getPemContents(pem, type)), c => c.charCodeAt(0));
+        const content = Crypto.getPemContents(pem, type);
+        if (content && content.length > 0) {
+            return Uint8Array.from(atob(content), c => c.charCodeAt(0));
+        }
+        throw new Error(`pem '${pem}' invalid`);
     }
 
     /**
