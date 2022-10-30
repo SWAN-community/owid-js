@@ -88,6 +88,10 @@ export class Io {
         return c;
     }
 
+    public static writeDate(b: number[], v: number): number {
+        return Io.writeUint32(b, v);
+    }
+
     /**
      * Write a 32 bit unsigned integer.
      * @param b 
@@ -233,6 +237,13 @@ export class Io {
         const r = b.array.slice(b.index, b.index + c);
         b.index += c;
         return r;
+    }
+
+    public static writeSignature(b: number[], signature: Uint8Array): number {
+        if (signature.length !== 64) {
+            throw new Error('signature incorrect length');
+        }
+        return Io.writeByteArrayNoLength(b, signature);
     }
 
     /**
