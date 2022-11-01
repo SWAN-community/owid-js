@@ -1,5 +1,5 @@
 /* ****************************************************************************
- * Copyright 2021 51 Degrees Mobile Experts Limited (51degrees.com)
+ * Copyright 2022 51 Degrees Mobile Experts Limited (51degrees.com)
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License.
@@ -14,13 +14,39 @@
  * under the License.
  * ***************************************************************************/
 
-// PublicKey associated with the signer at a given point in time.
-export class PublicKey {
-	key: string; // The public key in PEM format
-	created: string; // Date time instance of the created value
-	cryptoKey?: CryptoKey; // The crypto version of the key
+import { Crypto } from './crypto';
 
-	// The date and time that the key was created as a string
+/**
+ * Key (either public or private) associated with the signer at a given point in
+ * time.
+ */
+export class Key {
+	pem: string; // The key in PEM format
+	created: string; // Date time and time the key was created as a string
+
+	/**
+	 * The crypto instance for the PEM key
+	 */
+	public async getCryptoKey(): Promise<CryptoKey> {
+		// If the crypto key instance is not set for the public key then import
+		// it from the PEM format version and record it to speed up future 
+		// operations.
+		let cryptoKey = this._cryptoKey;
+		if (!cryptoKey) {
+			cryptoKey = await Crypto.importKey(this.pem);
+			this._cryptoKey = cryptoKey;
+		}
+		return this._cryptoKey;
+	}
+
+	/**
+	 * Internal instance of the cryptokey.
+	 */
+	private _cryptoKey: CryptoKey;
+
+	/**
+	 * The date and time that the key was created as a Date.
+	 */
 	get createdDate(): Date {
 		return new Date(Date.parse(this.created));
 	}
@@ -31,13 +57,13 @@ export class PublicKey {
 	/**
 	 * Parameters optional to enable JSON serialization.
 	 * @param key public key in PEM format
-	 * @param created date the key created
+	 * @param created date the key was created
 	 */
 	constructor(key?: string, created?: string | Date | number) {
-		this.key = key;
+		this.pem = key;
 		if (created instanceof Date) {
 			this.createdDate = created;
-		} else if (typeof(created) === 'number') {
+		} else if (typeof (created) === 'number') {
 			this.createdDate = new Date(created);
 		} else {
 			this.created = created;

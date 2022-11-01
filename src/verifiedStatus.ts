@@ -14,17 +14,15 @@
  * under the License.
  * ***************************************************************************/
 
-import { Key } from './key';
-
 /**
- * Signer of Open Web Ids.
+ * Different status associated with verified values.
  */
-export interface Signer {
-	version: number; // The version for the signer instance
-	domain: string; // The registered domain name and key field
-	name: string; // The common name of the signer
-	email: string; // The email address to use to contact the signer
-	termsURL: string; // URL returning the T&Cs associated with the signed data
-	publicKeys: Key[]; // Public keys associated with the signer
-	privateKeys?: Key[]; // Private keys associated with the signer if available
+export enum VerifiedStatus {
+  NotStarted = 'NotStarted', // a verify method has not yet been called
+  SignerNotFound = 'SignerNotFound', // the signer data was not returned
+  KeyNotFound = 'KeyNotFound', // a public key is not available for verification
+  Valid = 'Valid', // the data is valid for the signature
+  NotValid = 'NotValid', // the data is not valid for the signature
+  Processing = 'Processing', // the process to verify the entity is not complete
+  Exception = 'Exception' // an error was thrown during verification
 }

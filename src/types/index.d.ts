@@ -1,5 +1,8 @@
+/**
+ * Crypto type used to support Node crypto functionality.
+ */
 declare module 'crypto' {
-    namespace webcrypto {
-        const subtle: SubtleCrypto;
-    }
+  namespace webcrypto {
+    const subtle: SubtleCrypto;
+  }
 }

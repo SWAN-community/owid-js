@@ -14,17 +14,10 @@
  * under the License.
  * ***************************************************************************/
 
-import { Key } from './key';
-
-/**
- * Signer of Open Web Ids.
- */
-export interface Signer {
-	version: number; // The version for the signer instance
-	domain: string; // The registered domain name and key field
-	name: string; // The common name of the signer
-	email: string; // The email address to use to contact the signer
-	termsURL: string; // URL returning the T&Cs associated with the signed data
-	publicKeys: Key[]; // Public keys associated with the signer
-	privateKeys?: Key[]; // Private keys associated with the signer if available
+export interface OWIDTarget {
+  /**
+   * Adds to the buffer the bytes that form the target of the OWID.
+   * @param buffer to add bytes to
+   */
+  addOwidData(buffer: number[]): void;
 }

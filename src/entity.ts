@@ -1,5 +1,5 @@
 /* ****************************************************************************
- * Copyright 2021 51 Degrees Mobile Experts Limited (51degrees.com)
+ * Copyright 2022 51 Degrees Mobile Experts Limited (51degrees.com)
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License.
@@ -14,9 +14,12 @@
  * under the License.
  * ***************************************************************************/
 
-// PrivateKey associated with the signer at a given point in time.
-export interface PrivateKey {
-	key: string; // The private key in PEM format
-	created: Date; // The date and time that the key was created
-	cryptoKey?: CryptoKey; // The crypto version of the key
+import { OWID } from './owid';
+import { OWIDTarget } from './target';
+
+export interface OWIDEntity<T extends OWIDTarget> {
+  /**
+   * OWID source associated with the entity. 
+   */
+  get source(): OWID<T>;
 }

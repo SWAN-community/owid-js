@@ -14,17 +14,24 @@
  * under the License.
  * ***************************************************************************/
 
-import { Key } from './key';
+import { OWIDEntity } from '../src/entity';
+import { OWIDTarget } from '../src/target';
+import { Io } from '../src/io';
+import { OWID } from '../src/owid';
 
 /**
- * Signer of Open Web Ids.
+ * Test entity class used with the OWID features.
  */
-export interface Signer {
-	version: number; // The version for the signer instance
-	domain: string; // The registered domain name and key field
-	name: string; // The common name of the signer
-	email: string; // The email address to use to contact the signer
-	termsURL: string; // URL returning the T&Cs associated with the signed data
-	publicKeys: Key[]; // Public keys associated with the signer
-	privateKeys?: Key[]; // Private keys associated with the signer if available
+export class TestEntity implements OWIDTarget, OWIDEntity<TestEntity> {
+
+  // Test value to be included in the data associated with the OWID.
+  public value: string;
+
+  // Instance of the OWID related to the data.
+  public source: OWID<TestEntity>;
+
+  // Needed to get the data that is signed along with the OWID domain and timestamp.
+  public addOwidData(buffer: number[]) {
+    Io.writeString(buffer, this.value);
+  }
 }
