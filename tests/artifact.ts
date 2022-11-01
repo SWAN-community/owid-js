@@ -20,7 +20,7 @@ import { Signer } from '../src/signer';
 import { TestEntity } from './testEntity';
 import { Crypto } from '../src/crypto';
 import { VerifiedStatus } from '../src/verifiedStatus';
-import { Io } from '@owid/io';
+import { Io } from '../src/io';
 
 export class Artifact {
 

@@ -72,12 +72,16 @@ export class Io {
 
   /**
    * Write an array of strings where the first dimension can be upto an
-   * unsigned 16 bit integer in length.
+   * unsigned 16 bit integer in length. If the value is empty then a zero length
+   * entry is written which when read back will result in an empty array.
    * @param b 
    * @param v 
    * @returns 
    */
   public static writeStrings(b: number[], v: string[]): number {
+    if (!v || v.length === 0) {
+      return this.writeUint16(b, 0);
+    }
     if (v.length > Math.pow(2, 16)) {
       throw new Error('array too long');
     }
