@@ -20,6 +20,7 @@ import { Signer } from '../src/signer';
 import { TestEntity } from './testEntity';
 import { Crypto } from '../src/crypto';
 import { VerifiedStatus } from '../src/verifiedStatus';
+import { Io } from '@owid/io';
 
 export class Artifact {
 
@@ -37,7 +38,9 @@ export class Artifact {
 
   constructor() {
     this.target = new TestEntity();
-    this.target.value = Artifact.testValue;
+    const b: number[] = [];
+    Io.writeString(b, Artifact.testValue);
+    this.target.value = new Uint8Array(b);
     this.target.source = new OWID<TestEntity>(this.target);
     this.target.source.domain = Artifact.testDomain;
   }

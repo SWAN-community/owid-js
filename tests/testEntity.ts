@@ -25,13 +25,17 @@ import { OWID } from '../src/owid';
 export class TestEntity implements OWIDTarget, OWIDEntity<TestEntity> {
 
   // Test value to be included in the data associated with the OWID.
-  public value: string;
+  public value: Uint8Array;
 
   // Instance of the OWID related to the data.
   public source: OWID<TestEntity>;
 
-  // Needed to get the data that is signed along with the OWID domain and timestamp.
+  /**
+   * Needed to get the data that is signed along with the OWID domain and 
+   * timestamp.
+   * @param buffer 
+   */
   public addOwidData(buffer: number[]) {
-    Io.writeString(buffer, this.value);
+    Io.writeByteArray(buffer, this.value);
   }
 }

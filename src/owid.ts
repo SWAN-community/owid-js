@@ -182,10 +182,10 @@ export class OWID<T extends OWIDTarget> implements IOWID {
    * Sign the data provided and update the signature of the OWID. The 
    * timestamp is updated to the current time. The domain and timestamp are
    * appended to the target data before signing.
-   * @param pemKey PEM format private key
+   * @param key 
    */
-  public async signWithPemKey(pemKey: string): Promise<void> {
-    await this.signWithCryptoKey(await Crypto.importPrivateKey(pemKey));
+  public async signWithKey(key: Key): Promise<void> {
+    await this.signWithCryptoKey(await key.getCryptoKey());
   }
 
   /**
@@ -209,7 +209,7 @@ export class OWID<T extends OWIDTarget> implements IOWID {
       }
     }
     this.domain = signer.domain;
-    await this.signWithPemKey(newest.pem);
+    await this.signWithKey(newest);
     this._signer = signer;
   }
 
