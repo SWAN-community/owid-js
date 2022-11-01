@@ -186,7 +186,7 @@ export class Io {
    */
   public static readString(b: Reader): string {
     let r = '';
-    while (b.index < b.array.length && b.array[b.index] != 0) {
+    while (b.index < b.array.length && b.array[b.index] !== 0) {
       r += String.fromCharCode(b.array[b.index++]);
     }
     b.index++;
