@@ -198,6 +198,20 @@ export class Io {
   }
 
   /**
+   * Reads an array of null terminated strings.
+   * @param b 
+   * @returns 
+   */
+  public static readStrings(b: Reader): string[] {
+    const c = Io.readUint16(b);
+    const a: string[] = [];
+    for (let i = 0; i < c; i++) {
+      a.push(Io.readString(b));
+    }
+    return a;
+  }
+
+  /**
    * Read an unsigned integer in big endian format.
    * @param b 
    * @returns 
@@ -208,6 +222,16 @@ export class Io {
       Io.readByte(b) << 16 |
       Io.readByte(b) << 24;
   }
+
+  /**
+   * Read an unsigned integer in big endian format.
+   * @param b 
+   * @returns 
+   */
+     public static readUint16(b: Reader): number {
+      return Io.readByte(b) |
+        Io.readByte(b) << 8;
+    }
 
   /**
    * Read a byte array where the first 4 bytes are the length as an unsigned
