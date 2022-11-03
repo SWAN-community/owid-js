@@ -26,13 +26,14 @@ export class DateHelper {
 
   /**
    * getDateInMinutes returns the number of minutes that have elapsed since the 
-   * ioDateBase epoch.
+   * ioDateBase epoch. Where a partial minute is found the result is rounded
+   * down.
    * @param date to be fetched in minutes
    * @returns the number of minutes that elapsed between the epoch and the date
    */
   public static getDateInMinutes(date: Date): number {
     const difference = date.getTime() - DateHelper.baseDate;
-    return difference / DateHelper.minuteInMs;
+    return Math.floor(difference / DateHelper.minuteInMs);
   }
 
   /**
