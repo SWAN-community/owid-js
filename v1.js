@@ -17,8 +17,7 @@
 /**
  * @class {owid} Open Web Id (OWID) library for client side parsing and
  * verification of Open Web Ids. This library is verify only. Creation and
- * signing of OWIDs is performed by the server side implementations owid-go
- * and owid-dotnet.
+ * signing of OWIDs is performed by the server side implementations.
  * @param {string} data             - base 64 encoded byte array
  * @property {string} data          - The base 64 string the instance was created from.
  * @property {object} owid          - The OWID tree.

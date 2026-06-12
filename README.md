@@ -14,9 +14,8 @@ about the concepts before looking into this implementation.
 
 This library is verify only and is intended for use in the browser. It parses
 OWIDs that were created elsewhere and verifies their signatures. It cannot
-create or sign OWIDs. Creation and signing are implemented in the server side
-libraries [owid-go](https://github.com/SWAN-community/owid-go) and
-[owid-dotnet](https://github.com/SWAN-community/owid-dotnet).
+create or sign OWIDs. Creation and signing are performed by the server side
+implementations.
 
 When the browser provides `crypto.subtle` the library fetches the creator's
 public key from their well known end point and verifies the ECDSA signature
@@ -141,8 +140,8 @@ Tests are performed using Jest. The fetch calls made by the library are
 mocked with jest-fetch-mock. The tests in `owid.test.js` cover parsing and
 the remote verify end point. The tests in `owid.crypto.test.js` cover local
 ECDSA signature verification using the web crypto implementation provided by
-Node. The tests in `owid.interop.test.js` verify fixtures signed by the
-Rust, Go and .NET implementations to prove cross-language compatibility.
+Node. The tests in `owid.interop.test.js` verify externally signed fixtures
+to prove signature compatibility.
 
 ### Pre-requisites
 
@@ -176,17 +175,6 @@ Alternatively use npm.
 npm install
 npm test
 ```
-
-## Related repositories
-
-* [owid](https://github.com/SWAN-community/owid) defines the OWID
-  specification and concepts.
-* [owid-go](https://github.com/SWAN-community/owid-go) is the Go
-  implementation. It creates, signs and verifies OWIDs server side.
-* [owid-dotnet](https://github.com/SWAN-community/owid-dotnet) is the .NET
-  implementation. It creates, signs and verifies OWIDs server side.
-* [owid-rust](https://github.com/SWAN-community/owid-rust) is the Rust
-  implementation. It creates, signs and verifies OWIDs server side.
 
 ## License
 
