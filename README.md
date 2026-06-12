@@ -141,7 +141,8 @@ Tests are performed using Jest. The fetch calls made by the library are
 mocked with jest-fetch-mock. The tests in `owid.test.js` cover parsing and
 the remote verify end point. The tests in `owid.crypto.test.js` cover local
 ECDSA signature verification using the web crypto implementation provided by
-Node.
+Node. The tests in `owid.interop.test.js` verify fixtures signed by the
+Rust, Go and .NET implementations to prove cross-language compatibility.
 
 ### Pre-requisites
 
@@ -183,6 +184,8 @@ npm test
 * [owid-go](https://github.com/SWAN-community/owid-go) is the Go
   implementation. It creates, signs and verifies OWIDs server side.
 * [owid-dotnet](https://github.com/SWAN-community/owid-dotnet) is the .NET
+  implementation. It creates, signs and verifies OWIDs server side.
+* [owid-rust](https://github.com/SWAN-community/owid-rust) is the Rust
   implementation. It creates, signs and verifies OWIDs server side.
 
 ## License
