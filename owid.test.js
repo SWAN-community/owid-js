@@ -42,36 +42,44 @@ const testBadOWID =
     "gw36t85HLwL6YdV4i9kYDCdsP54RS8on/roKKASyh19TpcUQxkIRALFk";
 
 beforeEach(() => {
-    // fetchMock.doMock();
+    fetchMock.resetMocks();
 
-    // fetchMock.dontMock();
-
-    fetchMock.mockResponse(req => {
+    fetchMock.mockResponse(async req => {
         var urlString = req.url;
         if (urlString.startsWith("//")) {
             urlString = "http:" + urlString;
+        } else if (urlString.startsWith("/")) {
+            urlString = "http://localhost" + urlString;
         }
         var url = new URL(urlString);
 
         if (url.pathname.endsWith("/verify")) {
-            if (url.searchParams.get('owid') == testBadOWID) {
-                return Promise.resolve(JSON.stringify({valid: false}));
-            } else if (url.searchParams.get('owid') == null || url.searchParams.get('owid') == "") {
-                return Promise.resolve({
+            // The library sends the OWID being verified as form parameters
+            // in the POST body, so read them from there.
+            var body = new URLSearchParams(await req.text());
+            var owidParam = body.get("owid");
+            if (owidParam == testBadOWID) {
+                return JSON.stringify({valid: false});
+            } else if (owidParam == null || owidParam == "") {
+                return {
                     status: 400,
                     body: "Not Found"
-                  });
+                };
             } else {
-                return Promise.resolve(JSON.stringify({valid: true}));
+                return JSON.stringify({valid: true});
             }
+        } else if (url.pathname.endsWith("/stop")) {
+            // Respond with a fragment so that the redirect performed by the
+            // stop method is a hash change that jsdom can complete.
+            return "#stopped";
         } else {
-          return  Promise.resolve({
-            status: 404,
-            body: "Not Found"
-          });
+            return {
+                status: 404,
+                body: "Not Found"
+            };
         }
     });
-    
+
 });
 
 test('verify OWID', () => {
@@ -218,4 +226,123 @@ test ('verify empty string throws error', () => {
 
     expect(() => o.verify("")).toThrow();
     expect(() => o.verify("")).toThrow("OWID(s) must have a value and cannot be an empty string.");
+});
+
+// The date field of the creator fixture decodes to 664619 minutes after the
+// OWID base date of 2020-01-01 00:00, which is 2021-04-06 12:59. Note that
+// the implementation parses the base date without an explicit UTC marker, so
+// the result matches UTC only when the local time zone offset is zero on
+// 2020-01-01, as it is for the UK where these tests are normally run.
+test('dateAsJavaScriptDate returns the creation date to the minute', () => {
+    var o = new owid(testCreatorOWID);
+
+    expect(o.date).toBe(664619);
+    var expected = new Date(Date.UTC(2020, 0, 1) + 664619 * 60 * 1000);
+    expect(o.dateAsJavaScriptDate().getTime()).toBe(expected.getTime());
+    expect(o.dateAsJavaScriptDate().toISOString())
+        .toBe("2021-04-06T12:59:00.000Z");
+});
+
+test('constructor with invalid base 64 throws', () => {
+    expect(() => new owid("not valid base64!!!")).toThrow();
+});
+
+test('parse with invalid base 64 throws', () => {
+    var o = new owid();
+
+    expect(() => o.parse("not valid base64!!!")).toThrow();
+});
+
+// Truncating the fixture after the date field leaves valid base 64 that no
+// longer contains a payload or signature. The parser reads the fields that
+// are present and returns empty arrays for the rest rather than throwing.
+test('constructor with truncated base 64 parses available fields', () => {
+    var o = new owid(testCreatorOWID.substring(0, 20));
+
+    expect(o.domain).toBe("51db.uk");
+    expect(o.date).toBe(664619);
+    expect(o.owid.payload.length).toBe(0);
+    expect(o.signature.length).toBe(0);
+});
+
+test.each([
+    [42],
+    [{}],
+    [null],
+    [true],
+])('constructor with non-string input %p throws', (value) => {
+    expect(() => new owid(value))
+        .toThrow("'data' parameter must be a string or undefined");
+});
+
+// The expected values below were derived by parsing the fixture once and are
+// locked in here as a regression test.
+test('creator OWID fields decode to expected values', () => {
+    var o = new owid(testCreatorOWID);
+
+    expect(o.owid.version).toBe(2);
+    expect(o.domain).toBe("51db.uk");
+    expect(o.date).toBe(664619);
+    expect(o.owid.payload.length).toBe(341);
+    expect(o.signature.length).toBe(64);
+    expect(o.signature[0]).toBe(74);
+    expect(o.signature[63]).toBe(64);
+});
+
+// The expected values below were derived by parsing the fixture once and are
+// locked in here as a regression test. The party OWID has a two byte payload
+// of 0x01 0x03 which makes the exact value assertions easy to read.
+test('party OWID payload accessors return exact values', () => {
+    var o = new owid(testSupplierOWID);
+
+    expect(o.owid.version).toBe(2);
+    expect(o.domain).toBe("pop-up.swan-demo.uk");
+    expect(o.date).toBe(664619);
+    expect(o.payloadAsString()).toBe("\u0001\u0003");
+    // payloadAsPrintable does not pad single digit hex values, so the two
+    // payload bytes 0x01 and 0x03 print as "13".
+    expect(o.payloadAsPrintable()).toBe("13");
+    expect(o.payloadAsBase64()).toBe("AQM=");
+    expect(o.signature.length).toBe(64);
+});
+
+test('verify rejects when the verify end point returns an error', () => {
+    fetchMock.mockResponseOnce("Server Error", { status: 500 });
+    var o = new owid(testCreatorOWID);
+
+    return expect(o.verify())
+        .rejects.toMatch("'Verify' request HTTP status code: 500");
+});
+
+test('verify rejects when the verify end point cannot be reached', () => {
+    fetchMock.mockRejectOnce(new Error("Network failure"));
+    var o = new owid(testCreatorOWID);
+
+    return expect(o.verify()).rejects.toThrow("Network failure");
+});
+
+test('stop issues the expected POST to the stop end point', async () => {
+    var logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+        var o = new owid();
+
+        o.stop(undefined, "cmp.swan-demo.uk", "https://return.swan-demo.uk/");
+
+        expect(fetch.mock.calls.length).toBe(1);
+        var url = fetch.mock.calls[0][0];
+        var init = fetch.mock.calls[0][1];
+        expect(url).toBe("/stop");
+        expect(init.method).toBe("POST");
+        expect(init.body.get("host")).toBe("cmp.swan-demo.uk");
+        expect(init.body.get("returnUrl")).toBe("https://return.swan-demo.uk/");
+
+        // Allow the response chain inside stop to settle before the test
+        // ends. The mocked response is a fragment so the redirect becomes a
+        // hash change that jsdom supports.
+        await new Promise(resolve => setTimeout(resolve, 0));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(window.location.hash).toBe("#stopped");
+    } finally {
+        logSpy.mockRestore();
+    }
 });
