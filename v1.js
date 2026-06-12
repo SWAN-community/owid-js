@@ -15,12 +15,15 @@
  * ***************************************************************************/
 
 /**
- * @class {owid} Open Web Id (OWID) library for client side parsing and 
- * verification of Open Web Ids.
+ * @class {owid} Open Web Id (OWID) library for client side parsing and
+ * verification of Open Web Ids. This library is verify only. Creation and
+ * signing of OWIDs is performed by the server side implementations owid-go
+ * and owid-dotnet.
  * @param {string} data             - base 64 encoded byte array
+ * @property {string} data          - The base 64 string the instance was created from.
  * @property {object} owid          - The OWID tree.
  * @property {string} domain        - Returns the creator of the OWID.
- * @property {int} date          - Returns the date and time the OWID was created in UTC.
+ * @property {int} date             - Returns the date and time the OWID was created as minutes since 2020-01-01 00:00.
  * @property {Uint8Array} signature - Returns the signature as byte array.
  */
 owid = function (data) {
@@ -361,8 +364,10 @@ owid = function (data) {
 
     /**
      * Returns the OWID creation date as a JavaScript Date object.
-     * @returns {Object} -  the OWID instance creation date as a JavaScript Date
-     * object.
+     * @function
+     * @memberof owid
+     * @returns {Date} the OWID instance creation date as a JavaScript Date
+     * object accurate to the minute.
      */
     this.dateAsJavaScriptDate = function() {
         var jsDate = new Date();
@@ -370,9 +375,13 @@ owid = function (data) {
         return jsDate;
     }
 
-    /** 
-     * Parses a base 64 encoded byte array into a OWID tree.
-     * @param {string} t - base 64 encoded byte array representing an OWID tree.
+    /**
+     * Parses a base 64 encoded byte array into a OWID tree. When no
+     * parameter is provided the data the instance was created from is used.
+     * @function
+     * @memberof owid
+     * @param {string} [t] - base 64 encoded byte array representing an OWID
+     * tree.
      * @returns {Object} OWID tree.
      */
     this.parse = function (t) {
@@ -397,9 +406,10 @@ owid = function (data) {
     }
 
     /**
-     * Returns the payload in hexadecimal.
+     * Returns the payload in hexadecimal. Single digit values are not
+     * padded with a leading zero.
      * @function
-     * @member owid
+     * @memberof owid
      * @returns {string} This OWID instance's payload as a hexadecimal.
      */
     this.payloadAsPrintable = function () {
@@ -417,10 +427,14 @@ owid = function (data) {
     }
 
     /**
-     * Stop an advert.
-     * @param {*} s - SWAN OWID
-     * @param {string} d - organization domain.
-     * @param {string} r - return url
+     * Stop an advert. Posts the organization domain and the return URL to
+     * the /stop end point and then redirects the browser to the URL
+     * contained in the response.
+     * @function
+     * @memberof owid
+     * @param {*} s - SWAN OWID, reserved and currently unused.
+     * @param {string} d - organization domain to stop.
+     * @param {string} r - return url to come back to once stopped.
      */
     this.stop = function (s, d, r) {
         var data = new URLSearchParams();
