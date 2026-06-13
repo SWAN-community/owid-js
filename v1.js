@@ -301,6 +301,13 @@ owid = function (data) {
             }
         }
 
+        // Guard against an empty or header only PEM, where there is no key
+        // data to decode. Without this the atob call below yields an empty
+        // array and importKey rejects with an opaque DOMException.
+        if (!pemContents) {
+            throw "public key PEM contains no key data";
+        }
+
         // Import the public key with the SHA-256 hash algorithm.
         return window.crypto.subtle.importKey(
             "spki",

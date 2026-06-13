@@ -47,6 +47,7 @@ const testDateInMinutes = 664619;
 
 const creatorDomain = "creator.swan-demo.uk";
 const wrongKeyDomain = "wrong-key.swan-demo.uk";
+const emptyKeyDomain = "empty-key.swan-demo.uk";
 
 /**
  * Builds the unsigned portion of a version 3 OWID as a byte array in the
@@ -118,6 +119,15 @@ beforeEach(() => {
         var url = new URL(urlString);
 
         if (url.pathname.endsWith("/creator")) {
+            // This domain returns a header only PEM with no key body, which
+            // exercises the empty public key guard in the library.
+            if (url.hostname == emptyKeyDomain) {
+                return Promise.resolve(JSON.stringify({
+                    publicKeySPKI:
+                        "-----BEGIN PUBLIC KEY-----\n" +
+                        "-----END PUBLIC KEY-----"
+                }));
+            }
             var keyPair = url.hostname == wrongKeyDomain ?
                 otherKeyPair :
                 creatorKeyPair;
@@ -205,6 +215,18 @@ test('crypto verify party OWID signed with creator OWID passes', () => {
     return party.verify(creator).then(valid => {
         expect(valid).toBe(true);
     });
+});
+
+test('crypto verify empty public key PEM rejects', () => {
+    var unsigned = buildUnsignedOWID(
+        emptyKeyDomain, testDateInMinutes, Buffer.from("example"));
+    // The OWID is signed correctly but the mocked creator end point for this
+    // domain returns a header only PEM with no key data, so the import must
+    // reject with the clear message rather than an opaque DOMException.
+    var o = new owid(signOWID(unsigned, creatorKeyPair.privateKey));
+
+    return expect(o.verify()).rejects.toBe(
+        "public key PEM contains no key data");
 });
 
 test('crypto verify party OWID with wrong creator OWID fails', () => {
