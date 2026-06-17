@@ -156,7 +156,7 @@ test('crypto verify valid OWID passes', () => {
         // request is to the creator end point.
         expect(fetch.mock.calls.length).toBe(1);
         expect(fetch.mock.calls[0][0]).toBe(
-            "//" + creatorDomain + "/owid/api/v1/creator");
+            "//" + creatorDomain + "/owid/api/v1/creator?date=" + testDateInMinutes);
     });
 });
 

@@ -22,6 +22,11 @@ public key from their well known end point and verifies the ECDSA signature
 locally. When `crypto.subtle` is not available it falls back to the creator's
 remote verify end point.
 
+The public key is requested for the OWID's own creation date
+(`?date=<minutes>`), so OWIDs signed before a signing-key rotation still
+verify. A creator that does not support the `date` parameter ignores it and
+returns its current key.
+
 ## Usage
 
 To use OWID-js:

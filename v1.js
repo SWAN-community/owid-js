@@ -326,6 +326,11 @@ owid = function (data) {
      */
     function verifyOWIDObjectWithPublicKey(r, o) {
         var url = "//" + o.domain + "/owid/api/v1/creator";
+        if (o.date != null) {
+            // Request the key that was current when this OWID was signed, so
+            // OWIDs created before a key rotation still verify.
+            url += "?date=" + o.date;
+        }
         return fetch(
             url,
             { mode: "cors", cache: "default" })
