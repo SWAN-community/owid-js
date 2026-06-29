@@ -319,6 +319,47 @@ owid = function (data) {
     }
 
     /**
+     * Resolve the Web Crypto SubtleCrypto implementation in a way that works
+     * both in the browser and in Node (where it is on globalThis.crypto).
+     */
+    function getSubtle() {
+        var c = (typeof globalThis !== "undefined" && globalThis.crypto)
+            ? globalThis.crypto
+            : (typeof window !== "undefined" ? window.crypto : undefined);
+        if (!c || !c.subtle) {
+            throw "Web Crypto (crypto.subtle) is not available in this " +
+                "environment";
+        }
+        return c.subtle;
+    }
+
+    /**
+     * Import an SPKI public key PEM using the supplied SubtleCrypto. Unlike
+     * importEcdsaKey this does not depend on the browser global and is used by
+     * the offline verifyWithPublicKey below.
+     */
+    function importSpkiKey(subtle, pem) {
+        var lines = pem.split('\n');
+        var contents = '';
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].trim();
+            if (line.length > 0 && line.indexOf('-----') < 0) {
+                contents += line;
+            }
+        }
+        if (!contents) {
+            throw "public key PEM contains no key data";
+        }
+        return subtle.importKey(
+            "spki",
+            Uint8Array.from(atob(contents), c => c.charCodeAt(0)),
+            ECDSA,
+            false,
+            ["verify"]
+        );
+    }
+
+    /**
      * Verify the payload of this OWID is the signature of the parent OWID.
      * @param {*} r - parent OWID as base 64 encoded byte array.
      * @param {Object} o - an OWID tree.
@@ -430,6 +471,40 @@ owid = function (data) {
      */
     this.payloadAsBase64 = function () {
         return parseToString(this.owid.payload);
+    }
+
+    /**
+     * Verify this OWID offline against a caller-supplied SPKI public key PEM,
+     * optionally together with other OWIDs that were signed with it (pass the
+     * same others, in the same order, as when signed). Unlike verify() this
+     * does not contact any network end point and works in Node as well as the
+     * browser. Returns a Promise that resolves to true if the signature is
+     * valid.
+     * @function
+     * @memberof owid
+     * @param {string} publicPem - the creator public key in SPKI PEM form.
+     * @param {(Object[]|string[])} [others] - other OWIDs covered by the
+     * signature.
+     * @returns {Promise} Promise resolving to true if the signature verifies.
+     */
+    this.verifyWithPublicKey = function (publicPem, others) {
+        var subtle = getSubtle();
+        var self = this;
+        others = others || [];
+        return importSpkiKey(subtle, publicPem).then(function (key) {
+            var parts = [getByteArray(self.owid)];
+            others.forEach(function (o) {
+                parts.push(typeof o === "string"
+                    ? parseToByteArray(o)
+                    : getByteArray(o));
+            });
+            var total = 0;
+            parts.forEach(function (p) { total += p.length; });
+            var message = new Uint8Array(total);
+            var offset = 0;
+            parts.forEach(function (p) { message.set(p, offset); offset += p.length; });
+            return subtle.verify(ECDSA, key, self.owid.signature, message);
+        });
     }
 
     /**

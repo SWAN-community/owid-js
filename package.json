@@ -1,4 +1,9 @@
 {
+  "name": "owid",
+  "version": "0.1.0",
+  "description": "Open Web Id (OWID) - client side parsing and verification.",
+  "main": "v1.js",
+  "license": "Apache-2.0",
   "devDependencies": {
     "jest": "^30.4.2",
     "jest-environment-jsdom": "^30.4.1",
