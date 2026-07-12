@@ -333,7 +333,11 @@ owid = function (data) {
         }
         return fetch(
             url,
-            { mode: "cors", cache: "default" })
+            {
+                mode: "cors",
+                cache: "default",
+                headers: owid.fetchHeaders
+            })
             .then(r => {
                 if (r.ok) {
                     return r.json()    
@@ -655,6 +659,15 @@ owid = function (data) {
 
     //#endregion
 }
+
+/**
+ * Optional HTTP headers sent with the creator request that fetches the
+ * public key. Servers MAY require a credential, for example
+ * { "X-Api-Key": "<key>" }. The headers go to every creator domain a
+ * verification touches, so only set a credential that all the creators
+ * in the tree are meant to see.
+ */
+owid.fetchHeaders = undefined;
 
 try {
     module.exports = owid;
