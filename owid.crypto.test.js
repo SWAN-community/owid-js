@@ -264,3 +264,82 @@ test('crypto verify party OWID with wrong creator OWID fails', () => {
         expect(valid).toBe(false);
     });
 });
+
+// The following tests exercise the offline verifyWithPublicKey path, which
+// verifies against a caller supplied SPKI PEM with no network round trip.
+
+// The creator public key in SPKI PEM form, as a caller would supply it.
+const creatorPublicPem = creatorKeyPair.publicKey.export({
+    type: 'spki',
+    format: 'pem'
+});
+const otherPublicPem = otherKeyPair.publicKey.export({
+    type: 'spki',
+    format: 'pem'
+});
+
+test('verifyWithPublicKey valid OWID passes with no fetch', () => {
+    var unsigned = buildUnsignedOWID(
+        creatorDomain, testDateInMinutes, Buffer.from("example"));
+    var o = new owid(signOWID(unsigned, creatorKeyPair.privateKey));
+
+    return o.verifyWithPublicKey(creatorPublicPem).then(valid => {
+        expect(valid).toBe(true);
+        // The offline path must not contact any end point.
+        expect(fetch.mock.calls.length).toBe(0);
+    });
+});
+
+test('verifyWithPublicKey wrong public key fails', () => {
+    var unsigned = buildUnsignedOWID(
+        creatorDomain, testDateInMinutes, Buffer.from("example"));
+    var o = new owid(signOWID(unsigned, creatorKeyPair.privateKey));
+
+    return o.verifyWithPublicKey(otherPublicPem).then(valid => {
+        expect(valid).toBe(false);
+    });
+});
+
+test('verifyWithPublicKey tampered signature fails', () => {
+    var unsigned = buildUnsignedOWID(
+        creatorDomain, testDateInMinutes, Buffer.from("example"));
+    var valid = signOWID(unsigned, creatorKeyPair.privateKey);
+    var o = new owid(corruptByte(valid, -1));
+
+    return o.verifyWithPublicKey(creatorPublicPem).then(valid => {
+        expect(valid).toBe(false);
+    });
+});
+
+test('verifyWithPublicKey covers others in the signature', () => {
+    var creatorUnsigned = buildUnsignedOWID(
+        creatorDomain, testDateInMinutes, Buffer.from("example"));
+    var creator = new owid(
+        signOWID(creatorUnsigned, creatorKeyPair.privateKey));
+
+    // The party signature covers the party bytes followed by the complete
+    // creator OWID, so the creator OWID is supplied as an "other".
+    var partyUnsigned = buildUnsignedOWID(
+        creatorDomain, testDateInMinutes, Buffer.from([1, 3]));
+    var party = new owid(signOWID(
+        partyUnsigned,
+        creatorKeyPair.privateKey,
+        Buffer.from(creator.data, 'base64')));
+
+    return party.verifyWithPublicKey(creatorPublicPem, [creator.data])
+        .then(valid => {
+            expect(valid).toBe(true);
+        });
+});
+
+test('verifyWithPublicKey empty PEM rejects rather than throwing', () => {
+    var unsigned = buildUnsignedOWID(
+        creatorDomain, testDateInMinutes, Buffer.from("example"));
+    var o = new owid(signOWID(unsigned, creatorKeyPair.privateKey));
+
+    // A header only PEM has no key data. The failure must arrive as a
+    // rejected promise, not a synchronous throw that escapes .catch.
+    var emptyPem = "-----BEGIN PUBLIC KEY-----\n-----END PUBLIC KEY-----";
+    return expect(o.verifyWithPublicKey(emptyPem)).rejects.toBe(
+        "public key PEM contains no key data");
+});
