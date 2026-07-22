@@ -141,7 +141,7 @@ owid = function (data) {
             if (v == 1) {
                 var h = readByte(b);
                 var l = readByte(b);
-                return (h >> 8 | l) * 24 * 60;
+                return (h << 8 | l) * 24 * 60;
             }
             if (v == 2 || v == 3) {
                 return readUint32(b);
@@ -263,11 +263,12 @@ owid = function (data) {
         data.append("owid", t);
         var url = "//" + o.domain + "/owid/api/v" + o.version + "/verify";
         return fetch(url,
-            { 
+            {
                 method: "POST",
-                mode: "cors", 
+                mode: "cors",
                 cache: "no-cache",
-                body: data 
+                headers: owid.fetchHeaders,
+                body: data
             })
             .then(r => {
                 if (r.ok) {
