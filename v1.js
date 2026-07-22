@@ -25,8 +25,8 @@
  * @property {int} date             - Returns the date and time the OWID was created as minutes since 2020-01-01 00:00.
  * @property {Uint8Array} signature - Returns the signature as byte array.
  */
-owid = function (data) {
-    "use-strict";
+var owid = function (data) {
+    "use strict";
 
     //#region Constructor
 
@@ -488,22 +488,27 @@ owid = function (data) {
      * @returns {Promise} Promise resolving to true if the signature verifies.
      */
     this.verifyWithPublicKey = function (publicPem, others) {
-        var subtle = getSubtle();
         var self = this;
-        others = others || [];
-        return importSpkiKey(subtle, publicPem).then(function (key) {
-            var parts = [getByteArray(self.owid)];
-            others.forEach(function (o) {
-                parts.push(typeof o === "string"
-                    ? parseToByteArray(o)
-                    : getByteArray(o));
+        // Defer so a synchronous failure in getSubtle or importSpkiKey (e.g.
+        // no Web Crypto, or an empty PEM) surfaces as a rejected promise
+        // rather than a synchronous throw that escapes the caller's .catch.
+        return Promise.resolve().then(function () {
+            var subtle = getSubtle();
+            others = others || [];
+            return importSpkiKey(subtle, publicPem).then(function (key) {
+                var parts = [getByteArray(self.owid)];
+                others.forEach(function (o) {
+                    parts.push(typeof o === "string"
+                        ? parseToByteArray(o)
+                        : getByteArray(o));
+                });
+                var total = 0;
+                parts.forEach(function (p) { total += p.length; });
+                var message = new Uint8Array(total);
+                var offset = 0;
+                parts.forEach(function (p) { message.set(p, offset); offset += p.length; });
+                return subtle.verify(ECDSA, key, self.owid.signature, message);
             });
-            var total = 0;
-            parts.forEach(function (p) { total += p.length; });
-            var message = new Uint8Array(total);
-            var offset = 0;
-            parts.forEach(function (p) { message.set(p, offset); offset += p.length; });
-            return subtle.verify(ECDSA, key, self.owid.signature, message);
         });
     }
 
