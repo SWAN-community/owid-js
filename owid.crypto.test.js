@@ -156,7 +156,23 @@ test('crypto verify valid OWID passes', () => {
         // request is to the creator end point.
         expect(fetch.mock.calls.length).toBe(1);
         expect(fetch.mock.calls[0][0]).toBe(
-            "//" + creatorDomain + "/owid/api/v1/creator");
+            "//" + creatorDomain + "/owid/api/v1/creator?date=" + testDateInMinutes);
+    });
+});
+
+test('crypto verify sends configured fetch headers', () => {
+    var unsigned = buildUnsignedOWID(
+        creatorDomain, testDateInMinutes, Buffer.from("example"));
+    var o = new owid(signOWID(unsigned, creatorKeyPair.privateKey));
+
+    owid.fetchHeaders = { "X-Api-Key": "test-key" };
+    return o.verify().then(valid => {
+        expect(valid).toBe(true);
+        expect(fetch.mock.calls.length).toBe(1);
+        expect(fetch.mock.calls[0][1].headers["X-Api-Key"])
+            .toBe("test-key");
+    }).finally(() => {
+        owid.fetchHeaders = undefined;
     });
 });
 

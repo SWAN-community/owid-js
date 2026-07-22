@@ -141,7 +141,7 @@ owid = function (data) {
             if (v == 1) {
                 var h = readByte(b);
                 var l = readByte(b);
-                return (h >> 8 | l) * 24 * 60;
+                return (h << 8 | l) * 24 * 60;
             }
             if (v == 2 || v == 3) {
                 return readUint32(b);
@@ -263,11 +263,12 @@ owid = function (data) {
         data.append("owid", t);
         var url = "//" + o.domain + "/owid/api/v" + o.version + "/verify";
         return fetch(url,
-            { 
+            {
                 method: "POST",
-                mode: "cors", 
+                mode: "cors",
                 cache: "no-cache",
-                body: data 
+                headers: owid.fetchHeaders,
+                body: data
             })
             .then(r => {
                 if (r.ok) {
@@ -367,9 +368,18 @@ owid = function (data) {
      */
     function verifyOWIDObjectWithPublicKey(r, o) {
         var url = "//" + o.domain + "/owid/api/v1/creator";
+        if (o.date != null) {
+            // Request the key that was current when this OWID was signed, so
+            // OWIDs created before a key rotation still verify.
+            url += "?date=" + o.date;
+        }
         return fetch(
             url,
-            { mode: "cors", cache: "default" })
+            {
+                mode: "cors",
+                cache: "default",
+                headers: owid.fetchHeaders
+            })
             .then(r => {
                 if (r.ok) {
                     return r.json()    
@@ -725,6 +735,15 @@ owid = function (data) {
 
     //#endregion
 }
+
+/**
+ * Optional HTTP headers sent with the creator request that fetches the
+ * public key. Servers MAY require a credential, for example
+ * { "X-Api-Key": "<key>" }. The headers go to every creator domain a
+ * verification touches, so only set a credential that all the creators
+ * in the tree are meant to see.
+ */
+owid.fetchHeaders = undefined;
 
 try {
     module.exports = owid;

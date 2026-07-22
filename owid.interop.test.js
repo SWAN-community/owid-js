@@ -173,7 +173,7 @@ fixtures.forEach(f => {
             // request is to the creator end point.
             expect(fetch.mock.calls.length).toBe(1);
             expect(fetch.mock.calls[0][0]).toBe(
-                "//" + f.domain + "/owid/api/v1/creator");
+                "//" + f.domain + "/owid/api/v1/creator?date=" + o.date);
         });
     });
 
