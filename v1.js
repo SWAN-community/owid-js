@@ -34,7 +34,10 @@ var owid = function (data) {
         throw "'data' parameter must be a string or undefined";
     }
 
-    if (data !== undefined) {
+    // An empty string is treated as no data, the same as undefined, so
+    // the instance can still be used to verify other OWIDs. Parsing an
+    // empty string would be refused as an envelope with no version byte.
+    if (data !== undefined && data !== "") {
         this.data = data;
         this.owid = parse(data);
         this.date = this.owid.date;
@@ -110,7 +113,23 @@ var owid = function (data) {
      * @returns {Object} - OWID tree.
      */
     function parse(v) {
+        // The OWID signature is always 64 bytes and is the last thing in a
+        // valid OWID.
+        var signatureLength = 64;
+
+        // Refuses a read of n bytes that would run past the end of the
+        // buffer. Every count in the byte array is whatever the sender
+        // declared, so each read is bounded by the bytes actually present
+        // rather than trusting the count.
+        function checkPresent(b, n, what) {
+            if (b.index + n > b.array.length) {
+                throw "OWID " + what + " needs '" + n + "' bytes but " +
+                    "only '" + (b.array.length - b.index) + "' are present";
+            }
+        }
+
         function readByte(b) {
+            checkPresent(b, 1, "byte");
             return b.array[b.index++];
         }
 
@@ -119,19 +138,43 @@ var owid = function (data) {
             while (b.index < b.array.length && b.array[b.index] != 0) {
                 r += String.fromCharCode(b.array[b.index++]);
             }
+            // The scan stops at the end of the buffer, so a string with no
+            // zero terminator before the end is refused rather than the
+            // index moving past the end.
+            checkPresent(b, 1, "string terminator");
             b.index++;
             return r;
         }
 
         function readUint32(b) {
-            return b.array[b.index++] |
+            checkPresent(b, 4, "32 bit integer");
+            // The unsigned shift at the end keeps the result unsigned, as
+            // the bitwise operators otherwise make a count with the top
+            // bit set negative.
+            return (b.array[b.index++] |
                 b.array[b.index++] << 8 |
                 b.array[b.index++] << 16 |
-                b.array[b.index++] << 24;
+                b.array[b.index++] << 24) >>> 0;
         }
 
+        // Reads the length-prefixed payload. The count is whatever the
+        // sender declared, so it is checked against the bytes actually
+        // present before anything is sized by it. A valid OWID is the
+        // declared payload followed by the signature and nothing else, so
+        // the count must equal the bytes remaining less the signature
+        // length, and any other count, short or long, is refused here.
+        // Until 28 August 2026 the count went straight to slice, and as
+        // the count was read as a signed integer a top bit set moved the
+        // index backwards, so a malformed OWID parsed to something rather
+        // than being refused.
         function readByteArray(b) {
             var c = readUint32(b);
+            var remaining = b.array.length - b.index;
+            if (remaining !== c + signatureLength) {
+                throw "OWID payload length '" + c + "' does not match the '" +
+                    remaining + "' bytes present, of which the final '" +
+                    signatureLength + "' must be the signature";
+            }
             var r = b.array.slice(b.index, b.index + c)
             b.index += c;
             return r;
@@ -149,7 +192,13 @@ var owid = function (data) {
         }
 
         function readSignature(b) {
-            var c = 64; // The OWID signature is always 64 bytes.
+            var c = signatureLength;
+            // The payload check leaves exactly the signature, and this
+            // check keeps that true if the payload read ever changes.
+            if (b.array.length - b.index !== c) {
+                throw "OWID signature length '" + (b.array.length - b.index) +
+                    "' not compatible with '" + c + "' OWID signature length";
+            }
             var r = b.array.slice(b.index, b.index + c)
             b.index += c;
             return r;
