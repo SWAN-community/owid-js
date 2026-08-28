@@ -175,9 +175,9 @@ var owid = function (data) {
                     remaining + "' bytes present, of which the final '" +
                     signatureLength + "' must be the signature";
             }
-            // The decoded envelope already owns these bytes. Keep a view
-            // rather than making another payload-sized copy.
-            var r = b.array.subarray(b.index, b.index + c)
+            // Preserve the public parser's long-standing ownership model:
+            // callers receive a payload with its own backing buffer.
+            var r = b.array.slice(b.index, b.index + c)
             b.index += c;
             return r;
         }
@@ -201,7 +201,7 @@ var owid = function (data) {
                 throw "OWID signature length '" + (b.array.length - b.index) +
                     "' not compatible with '" + c + "' OWID signature length";
             }
-            var r = b.array.subarray(b.index, b.index + c)
+            var r = b.array.slice(b.index, b.index + c)
             b.index += c;
             return r;
         }

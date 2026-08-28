@@ -68,7 +68,9 @@ test('declared length matches parses', () => {
     expect(o.date).toBe(dateInMinutes);
     expect(Buffer.from(o.owid.payload).equals(payload)).toBe(true);
     expect(Buffer.from(o.signature).equals(signature)).toBe(true);
-    expect(o.owid.payload.buffer).toBe(o.signature.buffer);
+    // Parsed fields keep their historical independent backing buffers, so
+    // exposing payload.buffer cannot expose the rest of the OWID envelope.
+    expect(o.owid.payload.buffer).not.toBe(o.signature.buffer);
 });
 
 // A matching payload materially larger than an ordinary identifier remains
