@@ -68,6 +68,19 @@ test('declared length matches parses', () => {
     expect(o.date).toBe(dateInMinutes);
     expect(Buffer.from(o.owid.payload).equals(payload)).toBe(true);
     expect(Buffer.from(o.signature).equals(signature)).toBe(true);
+    expect(o.owid.payload.buffer).toBe(o.signature.buffer);
+});
+
+// A matching payload materially larger than an ordinary identifier remains
+// valid. Applications may impose a smaller policy before decoding it, but
+// that policy is not part of format parsing.
+test('matching one mebibyte payload parses', () => {
+    var largePayload = Buffer.alloc(1024 * 1024, 0x5A);
+
+    var o = new owid(envelope(
+        largePayload.length, largePayload, signature));
+
+    expect(Buffer.from(o.owid.payload).equals(largePayload)).toBe(true);
 });
 
 // An envelope with a real 64 byte ECDSA signature over its contents, built
@@ -124,18 +137,20 @@ test('signature of 63 bytes is refused', () => {
     expect(() => new owid(data)).toThrow("OWID payload length");
 });
 
-// A declared length far beyond the bytes present is refused without any work
-// sized by the declared number. JavaScript cannot measure allocation, so the
-// proof is time. The envelope is a few dozen bytes and declares 64 MiB, then
-// 2 GiB, then the largest unsigned value, and 1,000 refusals of each complete
-// in well under a second, which would fail if the parse allocated or copied
-// the declared size on each attempt. The third value also proves the count
-// is read as unsigned, as a signed read would turn it into minus one.
+// A large declaration whose payload bytes are absent is refused without any
+// work sized by the declared number. JavaScript cannot measure allocation,
+// so the proof is time. Each envelope is a few dozen bytes while declaring
+// 64 MiB, 2 GiB, or the largest unsigned value. The numeric values remain
+// valid when the matching payload is present. One thousand refusals of each
+// complete in well under a second, which would fail if the parse allocated
+// or copied the declared size on each attempt. The third value also proves
+// the count is read as unsigned, as a signed read would turn it into minus
+// one.
 test.each([
     [64 * 1024 * 1024],
     [0x7FFFFFFF],
     [0xFFFFFFFF],
-])('huge declared length %p is refused quickly', (declared) => {
+])('mismatched large declaration %p is refused quickly', (declared) => {
     var data = envelope(declared, Buffer.alloc(0), Buffer.alloc(0));
     var attempts = 1000;
 

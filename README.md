@@ -38,6 +38,32 @@ The headers are sent to every creator domain that a verification touches,
 so only set a credential that all the creators in the tree are meant to
 see.
 
+## Payload size and application limits
+
+The OWID wire format stores the payload length as an unsigned 32 bit value,
+so a payload from zero through 4,294,967,295 bytes is structurally valid. The
+format defines no smaller payload limit. The null-terminated domain has no
+separate encoded maximum, so the protocol alone is not an application input
+limit for the complete envelope.
+
+This library validates that the declared payload length agrees with the bytes
+present before it takes a view of the payload. A large declaration without
+the corresponding bytes is malformed and is rejected without allocating the
+declared size. A matching large payload is not malformed merely because it is
+large, and parsing work and memory use scale with the bytes actually present.
+
+The in-memory APIs remain subject to the browser's typed-array, string,
+address-space and available-memory limits. Applications accepting untrusted
+OWIDs must choose limits suitable for their use case and enforce them before
+buffering or Base64-decoding the input. An implementation capacity failure or
+an application policy rejection is distinct from an invalid OWID.
+
+For transport input, limit the complete HTTP body or encoded envelope; allow
+for the domain and other OWID fields as well as the payload. After parsing,
+`instance.owid.payload.length` reports the actual payload size without
+another copy and can be used for downstream policy. The parser cannot choose
+either limit on behalf of the application.
+
 ## Usage
 
 To use OWID-js:

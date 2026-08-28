@@ -175,7 +175,9 @@ var owid = function (data) {
                     remaining + "' bytes present, of which the final '" +
                     signatureLength + "' must be the signature";
             }
-            var r = b.array.slice(b.index, b.index + c)
+            // The decoded envelope already owns these bytes. Keep a view
+            // rather than making another payload-sized copy.
+            var r = b.array.subarray(b.index, b.index + c)
             b.index += c;
             return r;
         }
@@ -199,7 +201,7 @@ var owid = function (data) {
                 throw "OWID signature length '" + (b.array.length - b.index) +
                     "' not compatible with '" + c + "' OWID signature length";
             }
-            var r = b.array.slice(b.index, b.index + c)
+            var r = b.array.subarray(b.index, b.index + c)
             b.index += c;
             return r;
         }
@@ -252,39 +254,42 @@ var owid = function (data) {
      * @returns {Uint8Array} Array of bytes.
      */
     function getByteArray(t) {
+        var buffer;
+        var dataView;
+        var position;
 
-        function writeByte(b, v) {
-            b.push(v);
+        function writeByte(v) {
+            buffer[position++] = v;
         }
 
-        function writeString(b, v) {
+        function writeString(v) {
             for (var i = 0; i < v.length; i++) {
-                b.push(v.charCodeAt(i));
+                writeByte(v.charCodeAt(i));
             }
-            b.push(0);
+            writeByte(0);
         }
 
-        function writeUint32(b, v) {
-            var a = new ArrayBuffer(4);
-            var d = new DataView(a);
-            d.setUint32(0, v, true);
-            for (var i = 0; i < 4; i++) {
-                b.push(d.getUint8(i));
-            }
+        function writeUint32(v) {
+            dataView.setUint32(position, v, true);
+            position += 4;
         }
 
-        function writeByteArray(b, v) {
-            writeUint32(b, v.length)
-            v.forEach(e => b.push(e));
+        function writeByteArray(v) {
+            writeUint32(v.length);
+            buffer.set(v, position);
+            position += v.length;
         }
 
         if (t.version && t.domain && t.date && t.payload) {
-            var buf = [];
-            writeByte(buf, t.version);
-            writeString(buf, t.domain);
-            writeUint32(buf, t.date);
-            writeByteArray(buf, t.payload);
-            return new Uint8Array(buf);
+            var length = 1 + t.domain.length + 1 + 4 + 4 + t.payload.length;
+            buffer = new Uint8Array(length);
+            dataView = new DataView(buffer.buffer);
+            position = 0;
+            writeByte(t.version);
+            writeString(t.domain);
+            writeUint32(t.date);
+            writeByteArray(t.payload);
+            return buffer;
         }
     }
 
