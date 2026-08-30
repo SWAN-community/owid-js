@@ -28,13 +28,31 @@
 var owid = function (data) {
     "use strict";
 
+    // Maximum length of the creator domain in the presentation form that
+    // an OWID stores, being the text "example.com" rather than the DNS
+    // wire format. RFC 1035 section 2.3.4, "Size limits", restricts the
+    // total length of a domain name, meaning its label octets and label
+    // length octets, to 255 octets or less. That wire format spends one
+    // length octet on every label and one zero octet on the root, whereas
+    // the presentation form writes a dot in place of each label length
+    // octet and has no text at all for the root octet, so the same
+    // published limit is 253 characters here. Both the read and the write
+    // are bounded by this one value, so it is declared here above the
+    // constructor body rather than with the other constants further down,
+    // because the constructor parses its data before execution reaches
+    // that region and a declaration there would not yet be initialised.
+    const maximumDomainLength = 253;
+
     //#region Constructor
 
     if (data !== undefined && typeof data !== "string") {
         throw "'data' parameter must be a string or undefined";
     }
 
-    if (data !== undefined) {
+    // An empty string is treated as no data, the same as undefined, so
+    // the instance can still be used to verify other OWIDs. Parsing an
+    // empty string would be refused as an envelope with no version byte.
+    if (data !== undefined && data !== "") {
         this.data = data;
         this.owid = parse(data);
         this.date = this.owid.date;
@@ -110,28 +128,80 @@ var owid = function (data) {
      * @returns {Object} - OWID tree.
      */
     function parse(v) {
+        // The OWID signature is always 64 bytes and is the last thing in a
+        // valid OWID.
+        var signatureLength = 64;
+
+        // Refuses a read of n bytes that would run past the end of the
+        // buffer. Every count in the byte array is whatever the sender
+        // declared, so each read is bounded by the bytes actually present
+        // rather than trusting the count.
+        function checkPresent(b, n, what) {
+            if (b.index + n > b.array.length) {
+                throw "OWID " + what + " needs '" + n + "' bytes but " +
+                    "only '" + (b.array.length - b.index) + "' are present";
+            }
+        }
+
         function readByte(b) {
+            checkPresent(b, 1, "byte");
             return b.array[b.index++];
         }
 
+        // Reads the zero terminated creator domain. The scan stops at the
+        // end of the buffer, so a domain with no zero terminator before the
+        // end is refused rather than the index moving past the end, and it
+        // also stops one byte past the published maximum, so a buffer whose
+        // domain field never terminates costs the maximum rather than the
+        // length of whatever was sent.
         function readString(b) {
             var r = "";
-            while (b.index < b.array.length && b.array[b.index] != 0) {
+            var end = Math.min(
+                b.array.length,
+                b.index + maximumDomainLength + 1);
+            while (b.index < end && b.array[b.index] != 0) {
                 r += String.fromCharCode(b.array[b.index++]);
             }
+            if (r.length > maximumDomainLength) {
+                throw "OWID domain is not terminated within the '" +
+                    maximumDomainLength + "' character maximum";
+            }
+            checkPresent(b, 1, "string terminator");
             b.index++;
             return r;
         }
 
         function readUint32(b) {
-            return b.array[b.index++] |
+            checkPresent(b, 4, "32 bit integer");
+            // The unsigned shift at the end keeps the result unsigned, as
+            // the bitwise operators otherwise make a count with the top
+            // bit set negative.
+            return (b.array[b.index++] |
                 b.array[b.index++] << 8 |
                 b.array[b.index++] << 16 |
-                b.array[b.index++] << 24;
+                b.array[b.index++] << 24) >>> 0;
         }
 
+        // Reads the length-prefixed payload. The count is whatever the
+        // sender declared, so it is checked against the bytes actually
+        // present before anything is sized by it. A valid OWID is the
+        // declared payload followed by the signature and nothing else, so
+        // the count must equal the bytes remaining less the signature
+        // length, and any other count, short or long, is refused here.
+        // Until 28 August 2026 the count went straight to slice, and as
+        // the count was read as a signed integer a top bit set moved the
+        // index backwards, so a malformed OWID parsed to something rather
+        // than being refused.
         function readByteArray(b) {
             var c = readUint32(b);
+            var remaining = b.array.length - b.index;
+            if (remaining !== c + signatureLength) {
+                throw "OWID payload length '" + c + "' does not match the '" +
+                    remaining + "' bytes present, of which the final '" +
+                    signatureLength + "' must be the signature";
+            }
+            // Preserve the public parser's long-standing ownership model:
+            // callers receive a payload with its own backing buffer.
             var r = b.array.slice(b.index, b.index + c)
             b.index += c;
             return r;
@@ -149,7 +219,13 @@ var owid = function (data) {
         }
 
         function readSignature(b) {
-            var c = 64; // The OWID signature is always 64 bytes.
+            var c = signatureLength;
+            // The payload check leaves exactly the signature, and this
+            // check keeps that true if the payload read ever changes.
+            if (b.array.length - b.index !== c) {
+                throw "OWID signature length '" + (b.array.length - b.index) +
+                    "' not compatible with '" + c + "' OWID signature length";
+            }
             var r = b.array.slice(b.index, b.index + c)
             b.index += c;
             return r;
@@ -203,39 +279,58 @@ var owid = function (data) {
      * @returns {Uint8Array} Array of bytes.
      */
     function getByteArray(t) {
+        var buffer;
+        var dataView;
+        var position;
 
-        function writeByte(b, v) {
-            b.push(v);
+        // Refuse a domain longer than the maximum the read enforces, before
+        // anything is sized, written or signed over. A domain reaches this
+        // library either inside an OWID that is parsed, where the read bound
+        // above refuses an over long one, or inside an OWID tree object
+        // handed to verify or verifyWithPublicKey by a caller, and this is
+        // the first point that tree is used. Without the check here the
+        // library would write an over long domain into the bytes a
+        // signature is checked over, and into the data posted to another
+        // implementation's verify end point, which that implementation
+        // refuses to read.
+        if (t.domain && t.domain.length > maximumDomainLength) {
+            throw "OWID domain of '" + t.domain.length + "' characters is " +
+                "longer than the '" + maximumDomainLength + "' character " +
+                "maximum";
         }
 
-        function writeString(b, v) {
+        function writeByte(v) {
+            buffer[position++] = v;
+        }
+
+        function writeString(v) {
             for (var i = 0; i < v.length; i++) {
-                b.push(v.charCodeAt(i));
+                writeByte(v.charCodeAt(i));
             }
-            b.push(0);
+            writeByte(0);
         }
 
-        function writeUint32(b, v) {
-            var a = new ArrayBuffer(4);
-            var d = new DataView(a);
-            d.setUint32(0, v, true);
-            for (var i = 0; i < 4; i++) {
-                b.push(d.getUint8(i));
-            }
+        function writeUint32(v) {
+            dataView.setUint32(position, v, true);
+            position += 4;
         }
 
-        function writeByteArray(b, v) {
-            writeUint32(b, v.length)
-            v.forEach(e => b.push(e));
+        function writeByteArray(v) {
+            writeUint32(v.length);
+            buffer.set(v, position);
+            position += v.length;
         }
 
         if (t.version && t.domain && t.date && t.payload) {
-            var buf = [];
-            writeByte(buf, t.version);
-            writeString(buf, t.domain);
-            writeUint32(buf, t.date);
-            writeByteArray(buf, t.payload);
-            return new Uint8Array(buf);
+            var length = 1 + t.domain.length + 1 + 4 + 4 + t.payload.length;
+            buffer = new Uint8Array(length);
+            dataView = new DataView(buffer.buffer);
+            position = 0;
+            writeByte(t.version);
+            writeString(t.domain);
+            writeUint32(t.date);
+            writeByteArray(t.payload);
+            return buffer;
         }
     }
 

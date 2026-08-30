@@ -254,15 +254,12 @@ test('parse with invalid base 64 throws', () => {
 });
 
 // Truncating the fixture after the date field leaves valid base 64 that no
-// longer contains a payload or signature. The parser reads the fields that
-// are present and returns empty arrays for the rest rather than throwing.
-test('constructor with truncated base 64 parses available fields', () => {
-    var o = new owid(testCreatorOWID.substring(0, 20));
-
-    expect(o.domain).toBe("51db.uk");
-    expect(o.date).toBe(664619);
-    expect(o.owid.payload.length).toBe(0);
-    expect(o.signature.length).toBe(0);
+// longer contains a payload or signature. Every read is bounded by the bytes
+// present, so the parser refuses the envelope rather than reading past the
+// end and returning empty arrays for the missing fields.
+test('constructor with truncated base 64 is refused', () => {
+    expect(() => new owid(testCreatorOWID.substring(0, 20)))
+        .toThrow("bytes but only");
 });
 
 test.each([
