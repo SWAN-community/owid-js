@@ -317,11 +317,14 @@ test('domain that never terminates is refused for a bounded cost', () => {
     expect(touched).toBeLessThanOrEqual(maximumDomainLength + 1);
 });
 
-// A real signed envelope carrying a domain of the published maximum parses
-// and verifies as the same bytes, so the bound is not retrospective on
-// anything a server side library would produce.
-test('signed envelope with a maximum length domain parses', () => {
-    var longDomain = domainOfLength(maximumDomainLength);
+/**
+ * A version 3 envelope carrying the domain given, signed with a key pair
+ * made here, as the library never signs anything itself.
+ * @param {string} domainText - the creator domain of the envelope.
+ * @returns {Object} the unsigned bytes, the signature, the envelope as base
+ * 64 and the signing key pair's public key as an SPKI PEM.
+ */
+function signedEnvelope(domainText) {
     var keyPair = nodeCrypto.generateKeyPairSync('ec', {
         namedCurve: 'prime256v1'
     });
@@ -331,22 +334,131 @@ test('signed envelope with a maximum length domain parses', () => {
     length.writeUInt32LE(payload.length);
     var unsigned = Buffer.concat([
         Buffer.from([3]),
-        Buffer.from(longDomain, 'ascii'),
+        Buffer.from(domainText, 'ascii'),
         Buffer.from([0]),
         date,
         length,
         payload
     ]);
-    var realSignature = nodeCrypto.sign('sha256', unsigned, {
+    var signed = nodeCrypto.sign('sha256', unsigned, {
         key: keyPair.privateKey,
         dsaEncoding: 'ieee-p1363'
     });
-    expect(realSignature.length).toBe(signatureLength);
+    return {
+        unsigned: unsigned,
+        signature: signed,
+        data: Buffer.concat([unsigned, signed]).toString('base64'),
+        publicPem: keyPair.publicKey.export({ type: 'spki', format: 'pem' })
+    };
+}
 
-    var o = new owid(
-        Buffer.concat([unsigned, realSignature]).toString('base64'));
+// A real signed envelope carrying a domain of the published maximum parses
+// and verifies as the same bytes, so the bound is not retrospective on
+// anything a server side library would produce.
+test('signed envelope with a maximum length domain parses', () => {
+    var longDomain = domainOfLength(maximumDomainLength);
+    var e = signedEnvelope(longDomain);
+    expect(e.signature.length).toBe(signatureLength);
+
+    var o = new owid(e.data);
 
     expect(o.domain).toBe(longDomain);
     expect(Buffer.from(o.owid.payload).equals(payload)).toBe(true);
-    expect(Buffer.from(o.signature).equals(realSignature)).toBe(true);
+    expect(Buffer.from(o.signature).equals(e.signature)).toBe(true);
 });
+
+// The same published maximum binds the write as well as the read. A domain
+// reaches this library either inside an OWID that is parsed, which the tests
+// above cover, or inside an OWID tree object handed to verify or to
+// verifyWithPublicKey, which is serialized so the signature can be checked
+// over the bytes the creator signed. Where Web Crypto is not available that
+// serialized form is also the data posted to another implementation's verify
+// end point, so a domain longer than the maximum would put on the wire bytes
+// this same library refuses to read. These tests prove that a domain of the
+// maximum still serializes and verifies, and that one character more is
+// refused before any signature is checked.
+
+// The library serializes for verification, so a Web Crypto implementation
+// has to be present for the offline check below. Node provides one and it is
+// exposed here the same way a browser would, as the crypto tests do.
+Object.defineProperty(global.self, 'crypto', {
+    value: {
+        subtle: nodeCrypto.webcrypto.subtle
+    },
+    configurable: true
+});
+
+/**
+ * An OWID tree object of the shape a caller can hand to verify, carrying the
+ * domain given. Nothing here is signed, as the domain is refused, or not,
+ * before the signature is reached.
+ * @param {string} domainText - the creator domain of the tree.
+ * @returns {Object} the OWID tree.
+ */
+function domainTree(domainText) {
+    return {
+        version: 3,
+        domain: domainText,
+        date: dateInMinutes,
+        payload: payload
+    };
+}
+
+// A signed envelope with a domain of the maximum is parsed, serialized again
+// for verification and verifies, so the write bound leaves a domain the
+// library accepts today untouched and the library still round trips its own
+// serialized form back to the bytes that were signed.
+test('domain of the maximum length serialises and verifies', async () => {
+    var longDomain = domainOfLength(maximumDomainLength);
+    var e = signedEnvelope(longDomain);
+
+    var o = new owid(e.data);
+
+    expect(o.domain).toBe(longDomain);
+    await expect(o.verifyWithPublicKey(e.publicPem)).resolves.toBe(true);
+});
+
+// A tree carrying a domain of the maximum is serialized rather than refused.
+// The serializer writes the unsigned bytes only, with no signature on the
+// end, so verify goes on to complain that the bytes it was given stop where
+// the signature should start. That complaint, rather than one about the
+// domain, is what proves the domain of the maximum was written.
+test('tree with a maximum length domain is serialised', () => {
+    var tree = domainTree(domainOfLength(maximumDomainLength));
+
+    expect(() => new owid().verify(tree)).toThrow("OWID payload length");
+    expect(() => new owid().verify(tree)).not.toThrow(/domain/);
+});
+
+// One character more than the maximum is refused when the tree is
+// serialized, with the maximum named in the message.
+test('tree with a domain over the maximum is refused', () => {
+    var tooLong = domainOfLength(maximumDomainLength + 1);
+    expect(tooLong.length).toBe(maximumDomainLength + 1);
+    var tree = domainTree(tooLong);
+
+    expect(() => new owid().verify(tree))
+        .toThrow("OWID domain of '254' characters is longer than the '" +
+            maximumDomainLength + "' character maximum");
+});
+
+// Without the write bound an over long domain in an OWID tree handed to
+// verifyWithPublicKey is serialized into the message and the signature is
+// checked over it, as nothing on that route reads the bytes back. The bound
+// refuses the domain before any signature work, so the check below is that
+// the promise is rejected and that subtle.verify was never reached.
+test('domain over the maximum is refused before any signature work',
+    async () => {
+        var e = signedEnvelope(domain);
+        var o = new owid(e.data);
+        var tree = domainTree(domainOfLength(maximumDomainLength + 1));
+        var verifySpy = jest.spyOn(nodeCrypto.webcrypto.subtle, 'verify');
+
+        try {
+            await expect(o.verifyWithPublicKey(e.publicPem, [tree]))
+                .rejects.toMatch("character maximum");
+            expect(verifySpy).not.toHaveBeenCalled();
+        } finally {
+            verifySpy.mockRestore();
+        }
+    });

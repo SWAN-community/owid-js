@@ -28,6 +28,21 @@
 var owid = function (data) {
     "use strict";
 
+    // Maximum length of the creator domain in the presentation form that
+    // an OWID stores, being the text "example.com" rather than the DNS
+    // wire format. RFC 1035 section 2.3.4, "Size limits", restricts the
+    // total length of a domain name, meaning its label octets and label
+    // length octets, to 255 octets or less. That wire format spends one
+    // length octet on every label and one zero octet on the root, whereas
+    // the presentation form writes a dot in place of each label length
+    // octet and has no text at all for the root octet, so the same
+    // published limit is 253 characters here. Both the read and the write
+    // are bounded by this one value, so it is declared here above the
+    // constructor body rather than with the other constants further down,
+    // because the constructor parses its data before execution reaches
+    // that region and a declaration there would not yet be initialised.
+    const maximumDomainLength = 253;
+
     //#region Constructor
 
     if (data !== undefined && typeof data !== "string") {
@@ -116,17 +131,6 @@ var owid = function (data) {
         // The OWID signature is always 64 bytes and is the last thing in a
         // valid OWID.
         var signatureLength = 64;
-
-        // Maximum length of the creator domain in the presentation form
-        // that an OWID stores, being the text "example.com" rather than
-        // the DNS wire format. RFC 1035 section 2.3.4, "Size limits",
-        // restricts the total length of a domain name, meaning its label
-        // octets and label length octets, to 255 octets or less. That wire
-        // format spends one length octet on every label and one zero octet
-        // on the root, whereas the presentation form writes a dot in place
-        // of each label length octet and has no text at all for the root
-        // octet, so the same published limit is 253 characters here.
-        var maximumDomainLength = 253;
 
         // Refuses a read of n bytes that would run past the end of the
         // buffer. Every count in the byte array is whatever the sender
@@ -278,6 +282,22 @@ var owid = function (data) {
         var buffer;
         var dataView;
         var position;
+
+        // Refuse a domain longer than the maximum the read enforces, before
+        // anything is sized, written or signed over. A domain reaches this
+        // library either inside an OWID that is parsed, where the read bound
+        // above refuses an over long one, or inside an OWID tree object
+        // handed to verify or verifyWithPublicKey by a caller, and this is
+        // the first point that tree is used. Without the check here the
+        // library would write an over long domain into the bytes a
+        // signature is checked over, and into the data posted to another
+        // implementation's verify end point, which that implementation
+        // refuses to read.
+        if (t.domain && t.domain.length > maximumDomainLength) {
+            throw "OWID domain of '" + t.domain.length + "' characters is " +
+                "longer than the '" + maximumDomainLength + "' character " +
+                "maximum";
+        }
 
         function writeByte(v) {
             buffer[position++] = v;
