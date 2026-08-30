@@ -117,6 +117,17 @@ var owid = function (data) {
         // valid OWID.
         var signatureLength = 64;
 
+        // Maximum length of the creator domain in the presentation form
+        // that an OWID stores, being the text "example.com" rather than
+        // the DNS wire format. RFC 1035 section 2.3.4, "Size limits",
+        // restricts the total length of a domain name, meaning its label
+        // octets and label length octets, to 255 octets or less. That wire
+        // format spends one length octet on every label and one zero octet
+        // on the root, whereas the presentation form writes a dot in place
+        // of each label length octet and has no text at all for the root
+        // octet, so the same published limit is 253 characters here.
+        var maximumDomainLength = 253;
+
         // Refuses a read of n bytes that would run past the end of the
         // buffer. Every count in the byte array is whatever the sender
         // declared, so each read is bounded by the bytes actually present
@@ -133,14 +144,24 @@ var owid = function (data) {
             return b.array[b.index++];
         }
 
+        // Reads the zero terminated creator domain. The scan stops at the
+        // end of the buffer, so a domain with no zero terminator before the
+        // end is refused rather than the index moving past the end, and it
+        // also stops one byte past the published maximum, so a buffer whose
+        // domain field never terminates costs the maximum rather than the
+        // length of whatever was sent.
         function readString(b) {
             var r = "";
-            while (b.index < b.array.length && b.array[b.index] != 0) {
+            var end = Math.min(
+                b.array.length,
+                b.index + maximumDomainLength + 1);
+            while (b.index < end && b.array[b.index] != 0) {
                 r += String.fromCharCode(b.array[b.index++]);
             }
-            // The scan stops at the end of the buffer, so a string with no
-            // zero terminator before the end is refused rather than the
-            // index moving past the end.
+            if (r.length > maximumDomainLength) {
+                throw "OWID domain is not terminated within the '" +
+                    maximumDomainLength + "' character maximum";
+            }
             checkPresent(b, 1, "string terminator");
             b.index++;
             return r;

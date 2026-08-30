@@ -208,3 +208,145 @@ test('envelope ending inside the payload length is refused', () => {
 
     expect(() => new owid(cut.toString('base64'))).toThrow("32 bit integer");
 });
+
+// The creator domain is stored as ASCII followed by a zero terminator, and
+// the parser finds its end by walking forward to that terminator. RFC 1035
+// section 2.3.4 restricts a domain name to 255 octets in the DNS wire
+// format, which is 253 characters in the presentation form an OWID stores,
+// so the walk is bounded there. These tests prove that a domain of the
+// published maximum still parses, that a longer one is refused, and that a
+// buffer whose domain field never terminates is refused for a cost fixed by
+// the maximum rather than by the length of whatever was sent.
+
+const maximumDomainLength = 253;
+
+/**
+ * A domain of the length given, built as dot separated labels of no more
+ * than the 63 characters RFC 1035 allows a label, so the only thing under
+ * test is the total length.
+ * @param {number} length - the number of characters the domain must have.
+ * @returns {string} the domain.
+ */
+function domainOfLength(length) {
+    var labels = [];
+    var left = length;
+    while (left > 63) {
+        labels.push('a'.repeat(63));
+        left -= 64;
+    }
+    labels.push('a'.repeat(left));
+    return labels.join('.');
+}
+
+/**
+ * A version 3 envelope carrying the domain given, with a payload and a
+ * signature whose sizes agree, so the domain is the only field a test can
+ * make invalid.
+ * @param {string} domainText - the domain written to the envelope.
+ * @param {boolean} terminated - whether the zero terminator is written.
+ * @returns {string} the envelope as base 64.
+ */
+function domainEnvelope(domainText, terminated) {
+    var date = Buffer.alloc(4);
+    date.writeUInt32LE(dateInMinutes);
+    var length = Buffer.alloc(4);
+    length.writeUInt32LE(payload.length);
+    return Buffer.concat([
+        Buffer.from([3]),
+        Buffer.from(domainText, 'ascii'),
+        terminated ? Buffer.from([0]) : Buffer.alloc(0),
+        date,
+        length,
+        payload,
+        signature
+    ]).toString('base64');
+}
+
+// A domain of exactly the published maximum is a valid domain, so it parses
+// and comes back as the same text.
+test('domain of the maximum length parses', () => {
+    var longDomain = domainOfLength(maximumDomainLength);
+    expect(longDomain.length).toBe(maximumDomainLength);
+
+    var o = new owid(domainEnvelope(longDomain, true));
+
+    expect(o.domain).toBe(longDomain);
+    expect(o.date).toBe(dateInMinutes);
+    expect(Buffer.from(o.owid.payload).equals(payload)).toBe(true);
+});
+
+// One character more than the published maximum is refused, even though the
+// envelope is otherwise well formed and its terminator is present.
+test('domain one over the maximum length is refused', () => {
+    var tooLong = domainOfLength(maximumDomainLength + 1);
+    expect(tooLong.length).toBe(maximumDomainLength + 1);
+
+    var data = domainEnvelope(tooLong, true);
+
+    expect(() => new owid(data)).toThrow("OWID domain is not terminated");
+});
+
+// A buffer whose domain field has no terminator anywhere is refused without
+// the parser walking the whole buffer. JavaScript cannot measure allocation,
+// and the wall clock here is dominated by the base 64 decode rather than by
+// the walk, so the bound is measured by counting the walk itself. Building
+// the domain is the only thing that calls String.fromCharCode while an OWID
+// is being constructed, so the number of calls is the number of domain bytes
+// touched. The buffer is one mebibyte of domain characters with no zero byte
+// in it, and the parser must touch no more than one byte past the maximum
+// before it refuses.
+test('domain that never terminates is refused for a bounded cost', () => {
+    var data = Buffer.concat([
+        Buffer.from([3]),
+        Buffer.alloc(1024 * 1024, 0x61)
+    ]).toString('base64');
+    var real = String.fromCharCode;
+    var touched = 0;
+    String.fromCharCode = function () {
+        touched++;
+        return real.apply(String, arguments);
+    };
+
+    try {
+        expect(() => new owid(data))
+            .toThrow("OWID domain is not terminated");
+    } finally {
+        String.fromCharCode = real;
+    }
+
+    expect(touched).toBeLessThanOrEqual(maximumDomainLength + 1);
+});
+
+// A real signed envelope carrying a domain of the published maximum parses
+// and verifies as the same bytes, so the bound is not retrospective on
+// anything a server side library would produce.
+test('signed envelope with a maximum length domain parses', () => {
+    var longDomain = domainOfLength(maximumDomainLength);
+    var keyPair = nodeCrypto.generateKeyPairSync('ec', {
+        namedCurve: 'prime256v1'
+    });
+    var date = Buffer.alloc(4);
+    date.writeUInt32LE(dateInMinutes);
+    var length = Buffer.alloc(4);
+    length.writeUInt32LE(payload.length);
+    var unsigned = Buffer.concat([
+        Buffer.from([3]),
+        Buffer.from(longDomain, 'ascii'),
+        Buffer.from([0]),
+        date,
+        length,
+        payload
+    ]);
+    var realSignature = nodeCrypto.sign('sha256', unsigned, {
+        key: keyPair.privateKey,
+        dsaEncoding: 'ieee-p1363'
+    });
+    expect(realSignature.length).toBe(signatureLength);
+
+    var o = new owid(
+        Buffer.concat([unsigned, realSignature]).toString('base64'));
+
+    expect(o.domain).toBe(longDomain);
+    expect(Buffer.from(o.owid.payload).equals(payload)).toBe(true);
+    expect(Buffer.from(o.signature).equals(realSignature)).toBe(true);
+});
