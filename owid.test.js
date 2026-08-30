@@ -47,7 +47,7 @@ const testBadOWID =
  * @returns {Object} the OWID.
  */
 function read(data) {
-    var r = owid.tryParse(data);
+    var r = owid.parse(data);
     expect(r.ok).toBe(true);
     expect(r.status).toBe(owid.ParseStatus.PARSED);
     expect(r.owid).not.toBeNull();
@@ -208,7 +208,7 @@ test('verify bad actor\'s OWID', () => {
 // Nothing to read is not an OWID, and the read says so rather than handing
 // back an instance with no data in it.
 test('reading an empty string reports missing input', () => {
-    var r = owid.tryParse("");
+    var r = owid.parse("");
 
     expect(r.ok).toBe(false);
     expect(r.owid).toBeNull();
@@ -243,7 +243,7 @@ test('dateAsJavaScriptDate returns the creation date to the minute', () => {
 });
 
 test('reading invalid base 64 reports a status rather than throwing', () => {
-    var r = owid.tryParse("not valid base64!!!");
+    var r = owid.parse("not valid base64!!!");
 
     expect(r.ok).toBe(false);
     expect(r.owid).toBeNull();
@@ -255,7 +255,7 @@ test('reading invalid base 64 reports a status rather than throwing', () => {
 // stops inside a field before the length is even read is an unexpected end
 // rather than a count that disagrees.
 test('reading truncated base 64 is refused', () => {
-    var r = owid.tryParse(testCreatorOWID.substring(0, 20));
+    var r = owid.parse(testCreatorOWID.substring(0, 20));
 
     expect(r.ok).toBe(false);
     expect(r.owid).toBeNull();
@@ -268,7 +268,7 @@ test.each([
     [true],
     [[]],
 ])('reading non-string input %p reports the input type', (value) => {
-    var r = owid.tryParse(value);
+    var r = owid.parse(value);
 
     expect(r.ok).toBe(false);
     expect(r.owid).toBeNull();
@@ -321,7 +321,7 @@ test('a failing verify end point is not an invalid signature', () => {
     fetchMock.mockResponseOnce("Server Error", { status: 500 });
     var o = read(testCreatorOWID);
 
-    return o.verifyDetailed().then(r => {
+    return o.checkSignature().then(r => {
         expect(r.ok).toBe(false);
         expect(r.status).toBe(owid.SignatureStatus.VERIFICATION_ERROR);
     });
@@ -335,7 +335,7 @@ test('a verify response with no judgement is not an invalid signature', () => {
     fetchMock.mockResponseOnce(JSON.stringify({ somethingElse: true }));
     var o = read(testCreatorOWID);
 
-    return o.verifyDetailed().then(r => {
+    return o.checkSignature().then(r => {
         expect(r.ok).toBe(false);
         expect(r.status).toBe(owid.SignatureStatus.VERIFICATION_ERROR);
         expect(r.status).not.toBe(owid.SignatureStatus.SIGNATURE_INVALID);
@@ -359,7 +359,7 @@ test('verify rejects when the verify end point cannot be reached', () => {
 test('stop issues the expected POST to the stop end point', async () => {
     var logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     try {
-        var stopping = owid.stop(
+        var stopping = owid.stopAdvert(
             "cmp.swan-demo.uk", "https://return.swan-demo.uk/");
 
         expect(fetch.mock.calls.length).toBe(1);

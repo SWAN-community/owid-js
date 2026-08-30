@@ -100,7 +100,7 @@ beforeEach(() => {
 test('a successful read reports all three facts', () => {
     var e = signedEnvelope();
 
-    var r = owid.tryParse(e.data);
+    var r = owid.parse(e.data);
 
     expect(r.ok).toBe(true);
     expect(r.owid).not.toBeNull();
@@ -113,30 +113,40 @@ test('a successful read reports all three facts', () => {
 test('a read result is frozen', () => {
     var e = signedEnvelope();
 
-    var r = owid.tryParse(e.data);
+    var r = owid.parse(e.data);
 
     expect(Object.isFrozen(r)).toBe(true);
-    expect(Object.isFrozen(owid.tryParse(""))).toBe(true);
+    expect(Object.isFrozen(owid.parse(""))).toBe(true);
 });
 
 test.each([
     [undefined],
     [null],
     [""],
+    ["   "],
 ])('absent input %p is missing input', (value) => {
-    assertRefused(owid.tryParse(value), owid.ParseStatus.MISSING_INPUT);
+    assertRefused(owid.parse(value), owid.ParseStatus.MISSING_INPUT);
 });
 
 test.each([
     [undefined],
     [null],
 ])('an absent buffer %p is missing input', (value) => {
-    assertRefused(owid.tryParseBytes(value), owid.ParseStatus.MISSING_INPUT);
+    assertRefused(owid.parseBytes(value), owid.ParseStatus.MISSING_INPUT);
 });
 
+// A buffer of no bytes is nothing supplied, not data that stopped part way
+// through a field, so it is missing input on both the plain array and the
+// Buffer that node hands back.
 test('an empty buffer is missing input', () => {
     assertRefused(
-        owid.tryParseBytes(new Uint8Array(0)),
+        owid.parseBytes(new Uint8Array(0)),
+        owid.ParseStatus.MISSING_INPUT);
+    assertRefused(
+        owid.parseBytes(Buffer.alloc(0)),
+        owid.ParseStatus.MISSING_INPUT);
+    assertRefused(
+        owid.parseBytes(new Uint8Array(8).subarray(4, 4)),
         owid.ParseStatus.MISSING_INPUT);
 });
 
@@ -146,13 +156,13 @@ test.each([
     [true],
 ])('a buffer of the wrong type %p reports the input type', (value) => {
     assertRefused(
-        owid.tryParseBytes(value), owid.ParseStatus.INVALID_INPUT_TYPE);
+        owid.parseBytes(value), owid.ParseStatus.INVALID_INPUT_TYPE);
 });
 
 test('invalid base 64 is reported rather than thrown', () => {
     var r;
 
-    expect(() => { r = owid.tryParse("not base 64 !!!"); }).not.toThrow();
+    expect(() => { r = owid.parse("not base 64 !!!"); }).not.toThrow();
 
     assertRefused(r, owid.ParseStatus.INVALID_BASE64);
 });
@@ -167,10 +177,36 @@ test.each([
 ])('version byte %p is unsupported', (version) => {
     var e = signedEnvelope(payload, version);
 
-    var r = owid.tryParse(e.data);
+    var r = owid.parse(e.data);
 
     assertRefused(r, owid.ParseStatus.UNSUPPORTED_VERSION);
     expect(r.version).toBe(version);
+});
+
+// The empty marker is a lone version byte of zero. It carries no domain,
+// date, payload or signature, so it can never verify, and letting one
+// through would be the single way an OWID with no signature could reach a
+// caller. It is refused on both surfaces, as an unsupported version, and
+// nothing comes back to be verified.
+test('the empty marker is refused as an unsupported version', () => {
+    var lone = new Uint8Array([0]);
+
+    var fromBytes = owid.parseBytes(lone);
+    var fromBase64 = owid.parse(Buffer.from(lone).toString('base64'));
+
+    assertRefused(fromBytes, owid.ParseStatus.UNSUPPORTED_VERSION);
+    assertRefused(fromBase64, owid.ParseStatus.UNSUPPORTED_VERSION);
+    expect(fromBytes.version).toBe(0);
+    expect(fromBase64.version).toBe(0);
+});
+
+// A zero version byte followed by anything at all is refused on the version
+// alone, before any of the bytes after it are looked at.
+test('a zero version byte with data after it is still refused', () => {
+    var r = owid.parseBytes(new Uint8Array([0, 1, 2, 3, 4]));
+
+    assertRefused(r, owid.ParseStatus.UNSUPPORTED_VERSION);
+    expect(r.version).toBe(0);
 });
 
 // One trailing byte after a complete envelope means the declaration no
@@ -180,7 +216,7 @@ test('one trailing byte after a complete envelope is a count mismatch', () => {
     var e = signedEnvelope();
     var data = Buffer.concat([e.bytes, Buffer.from([0])]).toString('base64');
 
-    var r = owid.tryParse(data);
+    var r = owid.parse(data);
 
     assertRefused(r, owid.ParseStatus.BYTE_COUNT_MISMATCH);
     expect(r.declared).toBe(payload.length);
@@ -188,9 +224,9 @@ test('one trailing byte after a complete envelope is a count mismatch', () => {
 });
 
 // Data that stops inside the envelope, before the payload length is even
-// read, is an unexpected end.
+// read, is an unexpected end. Cutting at zero is nothing supplied and is
+// covered above, so the cases here all begin inside a field.
 test.each([
-    ['inside the version', 0],
     ['inside the domain', 1],
     ['inside the date', 1 + domain.length + 1 + 2],
     ['inside the payload length', 1 + domain.length + 1 + 4 + 2],
@@ -198,19 +234,28 @@ test.each([
     var e = signedEnvelope();
     var cut = e.bytes.subarray(0, at).toString('base64');
 
+    assertRefused(owid.parse(cut), owid.ParseStatus.UNEXPECTED_END);
+});
+
+// A creator domain that never terminates cannot be a domain, whatever
+// follows it. The bound and its cost are covered in
+// owid.payload-length.test.js, and the status is asserted here so that this
+// file exercises every status a parse can produce.
+test('an unterminated domain is an invalid domain encoding', () => {
+    var never = new Uint8Array(1 + 300);
+    never.fill(0x61);
+    never[0] = 3;
+
     assertRefused(
-        owid.tryParse(cut),
-        at === 0
-            ? owid.ParseStatus.MISSING_INPUT
-            : owid.ParseStatus.UNEXPECTED_END);
+        owid.parseBytes(never), owid.ParseStatus.INVALID_DOMAIN_ENCODING);
 });
 
 // Raw bytes are read on the same terms as base 64, and the envelope must be
 // the whole buffer.
-test('tryParseBytes reads a complete envelope', () => {
+test('parseBytes reads a complete envelope', () => {
     var e = signedEnvelope();
 
-    var r = owid.tryParseBytes(new Uint8Array(e.bytes));
+    var r = owid.parseBytes(new Uint8Array(e.bytes));
 
     expect(r.ok).toBe(true);
     expect(r.status).toBe(owid.ParseStatus.PARSED);
@@ -225,7 +270,7 @@ test('changing the buffer afterwards does not change the OWID', () => {
     var e = signedEnvelope();
     var buffer = new Uint8Array(e.bytes);
 
-    var o = owid.tryParseBytes(buffer).owid;
+    var o = owid.parseBytes(buffer).owid;
     var before = o.payloadAsString();
     buffer.fill(0x41);
 
@@ -243,7 +288,7 @@ test('a view into a larger buffer is read from where it starts', () => {
     big.set(new Uint8Array(e.bytes), 16);
     var view = big.subarray(16, 16 + e.bytes.length);
 
-    var r = owid.tryParseBytes(view);
+    var r = owid.parseBytes(view);
 
     expect(r.ok).toBe(true);
     expect(r.owid.domain).toBe(domain);
@@ -256,7 +301,7 @@ test('a signed byte array reads as the unsigned bytes it holds', () => {
     var e = signedEnvelope();
     var signed = new Int8Array(new Uint8Array(e.bytes).buffer);
 
-    var r = owid.tryParseBytes(signed);
+    var r = owid.parseBytes(signed);
 
     expect(r.ok).toBe(true);
     expect(r.owid.domain).toBe(domain);
@@ -266,7 +311,7 @@ test('a signed byte array reads as the unsigned bytes it holds', () => {
 // A view of something wider than a byte is not a byte array.
 test('a view of wider elements is the wrong input type', () => {
     assertRefused(
-        owid.tryParseBytes(new Uint32Array(4)),
+        owid.parseBytes(new Uint32Array(4)),
         owid.ParseStatus.INVALID_INPUT_TYPE);
 });
 
@@ -277,7 +322,7 @@ test('changing a Buffer afterwards does not change the OWID', () => {
     var e = signedEnvelope();
     var buffer = Buffer.from(e.bytes);
 
-    var o = owid.tryParseBytes(buffer).owid;
+    var o = owid.parseBytes(buffer).owid;
     var before = o.payloadAsString();
     buffer.fill(0x41);
 
@@ -290,7 +335,7 @@ test('changing a Buffer afterwards does not change the OWID', () => {
 // OWID either, for the same reason.
 test('writing into a payload read from a Buffer does not change the OWID',
     () => {
-        var o = owid.tryParseBytes(Buffer.from(signedEnvelope().bytes)).owid;
+        var o = owid.parseBytes(Buffer.from(signedEnvelope().bytes)).owid;
 
         o.payload.fill(0x41);
         o.signature.fill(0x41);
@@ -311,12 +356,12 @@ test('a decode that runs out of room is a capacity failure', () => {
     try {
         global.atob = function () { throw new RangeError("too long"); };
         assertRefused(
-            owid.tryParse("AAAA"),
+            owid.parse("AAAA"),
             owid.ParseStatus.IMPLEMENTATION_CAPACITY_EXCEEDED);
 
         global.atob = function () { throw new Error("bad character"); };
         assertRefused(
-            owid.tryParse("AAAA"), owid.ParseStatus.INVALID_BASE64);
+            owid.parse("AAAA"), owid.ParseStatus.INVALID_BASE64);
     } finally {
         global.atob = real;
     }
@@ -329,10 +374,10 @@ test('a failed read fetches no key and checks no signature', () => {
     var verifySpy = jest.spyOn(nodeCrypto.webcrypto.subtle, 'verify');
     var importSpy = jest.spyOn(nodeCrypto.webcrypto.subtle, 'importKey');
     try {
-        owid.tryParse("not base 64 !!!");
-        owid.tryParse("AAAA");
-        owid.tryParse(signedEnvelope().data + "AA");
-        owid.tryParseBytes(new Uint8Array([9, 9, 9]));
+        owid.parse("not base 64 !!!");
+        owid.parse("AAAA");
+        owid.parse(signedEnvelope().data + "AA");
+        owid.parseBytes(new Uint8Array([9, 9, 9]));
 
         expect(fetch.mock.calls.length).toBe(0);
         expect(verifySpy).not.toHaveBeenCalled();
@@ -348,7 +393,7 @@ test('a failed read fetches no key and checks no signature', () => {
 test('a successful read fetches no key and checks no signature', () => {
     var verifySpy = jest.spyOn(nodeCrypto.webcrypto.subtle, 'verify');
     try {
-        var r = owid.tryParse(signedEnvelope().data);
+        var r = owid.parse(signedEnvelope().data);
 
         expect(r.ok).toBe(true);
         expect(fetch.mock.calls.length).toBe(0);
@@ -371,24 +416,24 @@ test('a structurally valid OWID with a wrong signature reads, then fails ' +
     var tampered = Buffer.from(e.bytes);
     tampered[tampered.length - 1] = tampered[tampered.length - 1] ^ 0xFF;
 
-    var r = owid.tryParse(tampered.toString('base64'));
+    var r = owid.parse(tampered.toString('base64'));
 
     expect(r.ok).toBe(true);
     expect(r.status).toBe(owid.ParseStatus.PARSED);
     expect(r.owid.domain).toBe(domain);
 
     await expect(r.owid.verifyWithPublicKey(e.publicPem)).resolves.toBe(false);
-    var detailed = await r.owid.verifyWithPublicKeyDetailed(e.publicPem);
+    var detailed = await r.owid.checkSignatureWithPublicKey(e.publicPem);
     expect(detailed.ok).toBe(false);
     expect(detailed.status).toBe(owid.SignatureStatus.SIGNATURE_INVALID);
 });
 
 test('a genuine signature is reported valid', async () => {
     var e = signedEnvelope();
-    var o = owid.tryParse(e.data).owid;
+    var o = owid.parse(e.data).owid;
 
     await expect(o.verifyWithPublicKey(e.publicPem)).resolves.toBe(true);
-    var detailed = await o.verifyWithPublicKeyDetailed(e.publicPem);
+    var detailed = await o.checkSignatureWithPublicKey(e.publicPem);
     expect(detailed.ok).toBe(true);
     expect(detailed.status).toBe(owid.SignatureStatus.SIGNATURE_VALID);
 });
@@ -399,9 +444,9 @@ test('a genuine signature is reported valid', async () => {
 // and the identifiers were both fine.
 test('a key that cannot be imported is not an invalid signature', async () => {
     var e = signedEnvelope();
-    var o = owid.tryParse(e.data).owid;
+    var o = owid.parse(e.data).owid;
 
-    var detailed = await o.verifyWithPublicKeyDetailed(
+    var detailed = await o.checkSignatureWithPublicKey(
         "-----BEGIN PUBLIC KEY-----\n-----END PUBLIC KEY-----");
 
     expect(detailed.ok).toBe(false);
@@ -413,10 +458,10 @@ test('a key that cannot be imported is not an invalid signature', async () => {
 // fault rather than the identifier's.
 test('a key of the wrong type is not an invalid signature', async () => {
     var e = signedEnvelope();
-    var o = owid.tryParse(e.data).owid;
+    var o = owid.parse(e.data).owid;
     var rsa = nodeCrypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 
-    var detailed = await o.verifyWithPublicKeyDetailed(
+    var detailed = await o.checkSignatureWithPublicKey(
         rsa.publicKey.export({ type: 'spki', format: 'pem' }));
 
     expect(detailed.ok).toBe(false);
@@ -426,9 +471,9 @@ test('a key of the wrong type is not an invalid signature', async () => {
 // A creator end point that cannot be reached leaves the signature unjudged.
 test('a key that cannot be fetched is not an invalid signature', async () => {
     fetchMock.mockRejectOnce(new Error("Network failure"));
-    var o = owid.tryParse(signedEnvelope().data).owid;
+    var o = owid.parse(signedEnvelope().data).owid;
 
-    var detailed = await o.verifyDetailed();
+    var detailed = await o.checkSignature();
 
     expect(detailed.ok).toBe(false);
     expect(detailed.status).toBe(owid.SignatureStatus.KEY_UNAVAILABLE);
@@ -438,9 +483,9 @@ test('a key that cannot be fetched is not an invalid signature', async () => {
 // protocol failure rather than a missing key or a forgery.
 test('a creator response with no key is a verification error', async () => {
     fetchMock.mockResponseOnce(JSON.stringify({ notAKey: true }));
-    var o = owid.tryParse(signedEnvelope().data).owid;
+    var o = owid.parse(signedEnvelope().data).owid;
 
-    var detailed = await o.verifyDetailed();
+    var detailed = await o.checkSignature();
 
     expect(detailed.ok).toBe(false);
     expect(detailed.status).toBe(owid.SignatureStatus.VERIFICATION_ERROR);
@@ -456,7 +501,7 @@ test('a creator response with no key is a verification error', async () => {
 test('calling the module with new is refused', () => {
     expect(() => new owid(signedEnvelope().data))
         .toThrow("an OWID cannot be constructed");
-    expect(() => new owid()).toThrow("owid.tryParse");
+    expect(() => new owid()).toThrow("owid.parse");
 });
 
 test('calling the module without new is refused', () => {
@@ -477,7 +522,7 @@ test('an object made from the prototype is not an OWID', () => {
 // An OWID's own prototype leads nowhere either, so there is no constructor
 // to reach through an instance.
 test('an OWID exposes no constructor that builds another', () => {
-    var o = owid.tryParse(signedEnvelope().data).owid;
+    var o = owid.parse(signedEnvelope().data).owid;
 
     expect(Object.getPrototypeOf(o)).toBe(Object.prototype);
     expect(o.constructor).toBe(Object);
@@ -488,7 +533,7 @@ test('an OWID exposes no constructor that builds another', () => {
 // anything, so it is not an OWID and the library will not treat it as one.
 test('an object that looks like an OWID is not one', () => {
     var e = signedEnvelope();
-    var real = owid.tryParse(e.data).owid;
+    var real = owid.parse(e.data).owid;
     var fake = {
         data: real.data,
         version: real.version,
@@ -506,24 +551,24 @@ test('an object that looks like an OWID is not one', () => {
 // bytes a signature is checked over.
 test('a look alike is refused as another OWID', async () => {
     var e = signedEnvelope();
-    var o = owid.tryParse(e.data).owid;
+    var o = owid.parse(e.data).owid;
     var fake = { version: 3, domain: domain, date: 1, payload: payload };
 
-    var detailed = await o.verifyWithPublicKeyDetailed(e.publicPem, [fake]);
+    var detailed = await o.checkSignatureWithPublicKey(e.publicPem, [fake]);
 
     expect(detailed.ok).toBe(false);
     expect(detailed.status).toBe(owid.SignatureStatus.VERIFICATION_ERROR);
-    expect(detailed.message).toMatch("owid.tryParse");
+    expect(detailed.message).toMatch("owid.parse");
 });
 
 // A failure message names the type that was supplied and never the value, so
 // logging a refusal cannot log whatever an untrusted sender put in it.
 test('a refusal names no part of the input', async () => {
     var e = signedEnvelope();
-    var o = owid.tryParse(e.data).owid;
+    var o = owid.parse(e.data).owid;
     var secret = "aSecretACallerShouldNotSeeLogged";
 
-    var detailed = await o.verifyWithPublicKeyDetailed(
+    var detailed = await o.checkSignatureWithPublicKey(
         e.publicPem, [{ secret: secret }]);
 
     expect(detailed.message).not.toMatch(secret);
@@ -550,7 +595,7 @@ function strictAssign(o, name, value) {
 }
 
 test('an OWID is frozen', () => {
-    var o = owid.tryParse(signedEnvelope().data).owid;
+    var o = owid.parse(signedEnvelope().data).owid;
 
     expect(Object.isFrozen(o)).toBe(true);
 });
@@ -563,7 +608,7 @@ test.each([
     ['payload'],
     ['signature'],
 ])('the field %s cannot be set from outside', (name) => {
-    var o = owid.tryParse(signedEnvelope().data).owid;
+    var o = owid.parse(signedEnvelope().data).owid;
     var before = o[name];
 
     expect(() => strictAssign(o, name, "changed")).toThrow();
@@ -572,13 +617,13 @@ test.each([
 
 test.each([
     ['verify'],
-    ['verifyDetailed'],
+    ['checkSignature'],
     ['verifyWithPublicKey'],
-    ['verifyWithPublicKeyDetailed'],
+    ['checkSignatureWithPublicKey'],
     ['payloadAsString'],
     ['payloadAsBase64'],
 ])('the method %s cannot be rebound from outside', (name) => {
-    var o = owid.tryParse(signedEnvelope().data).owid;
+    var o = owid.parse(signedEnvelope().data).owid;
     var before = o[name];
 
     expect(() => strictAssign(o, name, function () { return "changed"; }))
@@ -587,7 +632,7 @@ test.each([
 });
 
 test('a new field cannot be added to an OWID', () => {
-    var o = owid.tryParse(signedEnvelope().data).owid;
+    var o = owid.parse(signedEnvelope().data).owid;
 
     expect(() => strictAssign(o, "extra", true)).toThrow();
     expect(o.extra).toBeUndefined();
@@ -599,7 +644,7 @@ test.each([
     ['payload'],
     ['signature'],
 ])('writing into the returned %s does not change the OWID', (name) => {
-    var o = owid.tryParse(signedEnvelope().data).owid;
+    var o = owid.parse(signedEnvelope().data).owid;
     var first = o[name];
 
     first.fill(0x41);
@@ -608,7 +653,7 @@ test.each([
 });
 
 test('each read of a byte field gives a separate array', () => {
-    var o = owid.tryParse(signedEnvelope().data).owid;
+    var o = owid.parse(signedEnvelope().data).owid;
 
     expect(o.payload).not.toBe(o.payload);
     expect(o.payload.buffer).not.toBe(o.signature.buffer);
@@ -618,7 +663,7 @@ test('each read of a byte field gives a separate array', () => {
 test('writing into the returned payload cannot change a verification',
     async () => {
         var e = signedEnvelope();
-        var o = owid.tryParse(e.data).owid;
+        var o = owid.parse(e.data).owid;
 
         o.payload.fill(0x41);
         o.signature.fill(0x41);
@@ -645,7 +690,7 @@ test.each([
 test('the documented example works', async () => {
     var e = signedEnvelope();
 
-    var result = owid.tryParse(e.data);
+    var result = owid.parse(e.data);
     if (result.ok) {
         var o = result.owid;
         expect(typeof o.payloadAsString()).toBe("string");

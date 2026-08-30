@@ -37,7 +37,7 @@ const dateInMinutes = 1000;
  * @returns {Object} the OWID.
  */
 function read(data) {
-    var r = owid.tryParse(data);
+    var r = owid.parse(data);
     expect(r.ok).toBe(true);
     expect(r.status).toBe(owid.ParseStatus.PARSED);
     expect(r.owid).not.toBeNull();
@@ -53,7 +53,7 @@ function read(data) {
  * @returns {Object} the result, so a test can check the numbers it carries.
  */
 function refused(data, status) {
-    var r = owid.tryParse(data);
+    var r = owid.parse(data);
     expect(r.ok).toBe(false);
     expect(r.owid).toBeNull();
     expect(r.status).toBe(status);
@@ -211,7 +211,7 @@ test.each([
 
     var start = Date.now();
     for (var i = 0; i < attempts; i++) {
-        var r = owid.tryParse(data);
+        var r = owid.parse(data);
         expect(r.ok).toBe(false);
         expect(r.status).toBe(owid.ParseStatus.BYTE_COUNT_MISMATCH);
         expect(r.declared).toBe(declared);
@@ -365,7 +365,7 @@ test('domain that never terminates is refused for a bounded cost', () => {
     try {
         // The base 64 decode itself builds no string through fromCharCode,
         // so every call counted below comes from the domain walk.
-        var r = owid.tryParse(data);
+        var r = owid.parse(data);
         expect(r.ok).toBe(false);
         expect(r.owid).toBeNull();
         expect(r.status).toBe(owid.ParseStatus.INVALID_DOMAIN_ENCODING);
@@ -473,7 +473,7 @@ test('a domain over the maximum cannot reach a signature check',
                 domainEnvelope(fabricated.domain, true),
                 owid.ParseStatus.INVALID_DOMAIN_ENCODING);
 
-            var r = await o.verifyWithPublicKeyDetailed(
+            var r = await o.checkSignatureWithPublicKey(
                 e.publicPem, [fabricated]);
             expect(r.ok).toBe(false);
             expect(r.status).toBe(

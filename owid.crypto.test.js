@@ -52,7 +52,7 @@ const testDateInMinutes = 664619;
  * @returns {Object} the OWID.
  */
 function read(data) {
-    var r = owid.tryParse(data);
+    var r = owid.parse(data);
     expect(r.ok).toBe(true);
     expect(r.status).toBe(owid.ParseStatus.PARSED);
     expect(r.owid).not.toBeNull();

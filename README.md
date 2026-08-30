@@ -42,8 +42,9 @@ see.
 
 An OWID is read from whatever a caller was handed, which on a public end
 point means anything at all, so malformed data is an ordinary outcome rather
-than an error. `owid.tryParse` and `owid.tryParseBytes` therefore never
-throw. Each returns a frozen result reporting the same three facts:
+than an error. `owid.parse` and `owid.parseBytes` therefore never
+throw, which is deliberately unlike `JSON.parse`. Each returns a frozen
+result reporting the same three facts:
 
 |Field|Type|Description|
 |-|-|-|
@@ -58,7 +59,7 @@ logging a failure cannot log whatever an untrusted sender chose to put in
 it.
 
 ```js
-var result = owid.tryParse(untrusted);
+var result = owid.parse(untrusted);
 if (result.ok) {
     result.owid.verify().then(valid => console.log(valid));
 } else {
@@ -74,15 +75,23 @@ against its members rather than against the text of any message.
 |Status|Meaning|
 |-|-|
 |PARSED|The bytes form a structurally valid OWID. This says nothing about the signature.|
-|MISSING_INPUT|Nothing was supplied to read, including an empty string or an empty buffer.|
+|MISSING_INPUT|Nothing was supplied, which covers an absent value, an empty string and a buffer of no bytes, on both surfaces. Not the same as data that stopped part way through a field, which is UNEXPECTED_END.|
 |INVALID_INPUT_TYPE|The input was supplied in a form this surface cannot read.|
 |INVALID_BASE64|The string is not valid base 64, so there are no bytes to read.|
-|UNSUPPORTED_VERSION|The first byte names a version this implementation does not know.|
+|UNSUPPORTED_VERSION|The first byte names a version this implementation does not know, which includes the empty marker.|
 |UNEXPECTED_END|The data stopped in the middle of a field.|
 |INVALID_DOMAIN_ENCODING|The creator domain is not terminated, or is longer than the published maximum.|
 |BYTE_COUNT_MISMATCH|The declared payload byte count disagrees with the bytes actually present.|
 |IMPLEMENTATION_CAPACITY_EXCEEDED|The envelope is structurally consistent but larger than this runtime can hold.|
 |MALFORMED_ENVELOPE|Malformed in a way none of the above describes.|
+
+### The empty marker
+
+An OWID whose version byte is zero is the empty marker. It carries no
+domain, date, payload or signature, so it can never verify. This library
+refuses it as `UNSUPPORTED_VERSION` rather than handing one back, because an
+OWID with no signature reaching a caller is the one thing having no
+constructor exists to prevent.
 
 Reading and verifying are two questions with two answers. A structurally
 valid identifier whose signature does not match reads successfully and then
@@ -106,7 +115,7 @@ never be read as a forgery.
 |IMPLEMENTATION_CAPACITY_EXCEEDED|The work required exceeds what this runtime can hold. Nothing reports this today.|
 |VERIFICATION_ERROR|The check could not be completed for a reason that is not the identifier's fault.|
 
-`verifyDetailed` and `verifyWithPublicKeyDetailed` report these statuses.
+`checkSignature` and `checkSignatureWithPublicKey` report these statuses.
 The plain `verify` and `verifyWithPublicKey` reduce them to a boolean,
 resolving true or false only for the two statuses that judge the signature
 and rejecting for the rest, because a caller told false would treat an
@@ -128,7 +137,7 @@ handed out as fresh copies, so writing into one cannot change the OWID whose
 signature was checked over the bytes as they arrived.
 
 Where the library is given other OWIDs that the same signature covered, it
-accepts base 64 strings and OWIDs from `tryParse`, and refuses an object
+accepts base 64 strings and OWIDs from `parse`, and refuses an object
 that merely carries the same field names, because such an object has never
 been read from anything.
 
@@ -170,7 +179,7 @@ To use OWID-js:
     ```
 * call the library:
     ```js
-    var result = owid.tryParse("[owid base 64 string]");
+    var result = owid.parse("[owid base 64 string]");
     if (result.ok) {
         result.owid.verify().then(valid => console.log(valid));
     }
@@ -182,11 +191,11 @@ To use OWID-js:
 
 |Operation|Params|Return Type|Description|
 |-|-|-|-|
-|tryParse|base 64 string|Object|Reads a complete OWID from its base 64 form. Never throws.|
-|tryParseBytes|Uint8Array|Object|Reads a complete OWID from a buffer holding exactly one. Never throws.|
+|parse|base 64 string|Object|Reads a complete OWID from its base 64 form. Never throws.|
+|parseBytes|Uint8Array|Object|Reads a complete OWID from a buffer holding exactly one. Never throws.|
 |isOwid|any|boolean|True when the value is an OWID this library read.|
 |verify|owid\|owids[]|Promise(bool)|Verifies each of the OWIDs supplied in its own right. Resolves to true when every one of them is genuine.|
-|stop|domain, return url|Promise|Posts the domain and return URL to the `/stop` end point and redirects the browser to the URL contained in the response.|
+|stopAdvert|domain, return url|Promise|Posts the domain and return URL to the `/stop` end point and redirects the browser to the URL contained in the response.|
 |ParseStatus|n/a|Object|Frozen read statuses.|
 |SignatureStatus|n/a|Object|Frozen signature statuses.|
 |fetchHeaders|n/a|Object|Optional HTTP headers sent with the creator request.|
@@ -202,9 +211,9 @@ Methods available on an OWID returned by a successful read.
 |payloadAsString|n/a|string|Returns the payload as a string.|
 |payloadAsBase64|n/a|string|Returns the payload as a base 64 string.|
 |verify|owid\|owids[] (optional)|Promise(bool)|Determines whether this OWID is genuine, together with any other OWIDs the same signature covered. Rejects when the question could not be answered.|
-|verifyDetailed|owid\|owids[] (optional)|Promise(Object)|As verify, reporting a `SignatureStatus` for every outcome.|
+|checkSignature|owid\|owids[] (optional)|Promise(Object)|As verify, reporting a `SignatureStatus` for every outcome.|
 |verifyWithPublicKey|SPKI PEM, owids[] (optional)|Promise(bool)|Verifies offline against a caller supplied public key, contacting no network end point.|
-|verifyWithPublicKeyDetailed|SPKI PEM, owids[] (optional)|Promise(Object)|As verifyWithPublicKey, reporting a `SignatureStatus`.|
+|checkSignatureWithPublicKey|SPKI PEM, owids[] (optional)|Promise(Object)|As verifyWithPublicKey, reporting a `SignatureStatus`.|
 
 ### Fields
 
@@ -230,7 +239,7 @@ reader. The first example is run as written in
 Read and verify an OWID.
 
 ```js
-var result = owid.tryParse("[signed OWID]");
+var result = owid.parse("[signed OWID]");
 if (!result.ok) {
     console.log("not an OWID: " + result.status);
     return;
@@ -252,8 +261,8 @@ o.verify()
 Verify one OWID that was signed with another OWID.
 
 ```js
-var o = owid.tryParse("[signed OWID]").owid;
-var other = owid.tryParse("[other signed OWID]").owid;
+var o = owid.parse("[signed OWID]").owid;
+var other = owid.parse("[other signed OWID]").owid;
 
 o.verify(other)
     .then(valid => console.log(valid))
@@ -263,7 +272,7 @@ o.verify(other)
 Verify one OWID with multiple OWID base 64 strings.
 
 ```js
-var o = owid.tryParse("[signed OWID]").owid;
+var o = owid.parse("[signed OWID]").owid;
 
 o.verify(["[signed OWID 1]", "[signed OWID 2]", "[signed OWID 3]"])
     .then(valid => console.log(valid))
@@ -281,7 +290,7 @@ owid.verify(["[signed OWID 1]", "[signed OWID 2]"])
 Tell an outage apart from a forgery.
 
 ```js
-owid.tryParse("[signed OWID]").owid.verifyDetailed().then(r => {
+owid.parse("[signed OWID]").owid.checkSignature().then(r => {
     if (r.status === owid.SignatureStatus.SIGNATURE_INVALID) {
         // The identifier should be distrusted.
     } else if (!r.ok) {
@@ -295,15 +304,15 @@ owid.tryParse("[signed OWID]").owid.verifyDetailed().then(r => {
 
 |Before|After|
 |-|-|
-|`var o = new owid(s);`|`var r = owid.tryParse(s); if (r.ok) { var o = r.owid; }`|
-|`try { new owid(s) } catch (e) { }`|`if (!owid.tryParse(s).ok) { }`|
+|`var o = new owid(s);`|`var r = owid.parse(s); if (r.ok) { var o = r.owid; }`|
+|`try { new owid(s) } catch (e) { }`|`if (!owid.parse(s).ok) { }`|
 |`new owid().verify(others)`|`owid.verify(others)`|
-|`new owid().parse(s)`|`owid.tryParse(s)`|
-|`new owid().stop(undefined, d, r)`|`owid.stop(d, r)`|
+|`new owid().parse(s)`|`owid.parse(s)`|
+|`new owid().stop(undefined, d, r)`|`owid.stopAdvert(d, r)`|
 |`o.owid.version`|`o.version`|
 |`o.owid.payload`|`o.payload`|
 |`o.owid.payloadAsString()`|`o.payloadAsString()`|
-|a hand built `{version, domain, date, payload}` passed to `verify`|not supported, pass a base 64 string or an OWID from `tryParse`|
+|a hand built `{version, domain, date, payload}` passed to `verify`|not supported, pass a base 64 string or an OWID from `parse`|
 
 ## Testing
 
@@ -313,7 +322,11 @@ the remote verify end point. The tests in `owid.parse-contract.test.js` cover
 what a read reports, that an OWID cannot be built or changed, and that
 reading and verifying stay two separate questions. The tests in
 `owid.payload-length.test.js` cover the declared payload length and the
-creator domain bound. The tests in `owid.crypto.test.js` cover local ECDSA
+creator domain bound. The tests in `owid.status-coverage.test.js` read the source and hold every
+member of both status vocabularies to having either a test that asserts it
+or a comment on the member saying that nothing produces it and why, so a
+member added with neither fails the build. The tests in
+`owid.crypto.test.js` cover local ECDSA
 signature verification using the web crypto implementation provided by Node.
 The tests in `owid.interop.test.js` verify externally signed fixtures to
 prove signature compatibility.

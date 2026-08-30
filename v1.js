@@ -20,8 +20,8 @@
  * performed by the server side implementations.
  *
  * An OWID reaches calling code by exactly one route here, which is a
- * successful read of a complete serialized OWID through owid.tryParse or
- * owid.tryParseBytes. There is deliberately no way to build one, because an
+ * successful read of a complete serialized OWID through owid.parse or
+ * owid.parseBytes. There is deliberately no way to build one, because an
  * OWID is only worth anything for being signed, and an unsigned one is
  * indistinguishable from a signed one to the code downstream of it, with the
  * difference surfacing later where nobody is watching.
@@ -98,7 +98,10 @@ var owid = (function () {
         // the signature, which is a separate question answered separately.
         PARSED: "Parsed",
 
-        // Nothing was supplied to read.
+        // Nothing was supplied to parse, which covers an absent value, an
+        // empty string and a buffer of no bytes on either surface. Having
+        // nothing to work on is not the same as data that stopped part way
+        // through a field, which is UNEXPECTED_END.
         MISSING_INPUT: "MissingInput",
 
         // The input was supplied in a form this surface cannot read.
@@ -108,6 +111,11 @@ var owid = (function () {
         INVALID_BASE64: "InvalidBase64",
 
         // The first byte names a version this implementation does not know.
+        // The empty marker, version byte zero, is one of those. It carries no
+        // domain, date, payload or signature, so it can never verify, and
+        // letting one through would be the single way an OWID with no
+        // signature could reach a caller, which is what having no constructor
+        // exists to prevent.
         UNSUPPORTED_VERSION: "UnsupportedVersion",
 
         // The data stopped in the middle of a field. Distinct from
@@ -128,12 +136,23 @@ var owid = (function () {
         // The envelope is structurally consistent but larger than this
         // runtime can hold. Not a fault in the data, and deliberately distinct
         // from the data being wrong, because the same bytes may be readable
-        // elsewhere.
+        // elsewhere. Reported when the base 64 decode runs out of room. No
+        // real envelope reaches it in V8, because the longest string the
+        // engine will build decodes to about 402 MB and the largest typed
+        // array is far larger, so the test drives the classification by making
+        // the decode fail the way it would rather than by building such a
+        // string.
         IMPLEMENTATION_CAPACITY_EXCEEDED: "ImplementationCapacityExceeded",
 
         // Malformed in a way none of the above describes. A fallback for the
         // genuinely unclassified, not a substitute for naming a failure that
         // is already understood.
+        //
+        // Nothing produces this, so no test asserts it. The only place that
+        // names it is the guard on a parse finishing anywhere other than the
+        // end of the buffer, and the byte count check above already makes
+        // that impossible. The guard is kept so that a future change to that
+        // arithmetic cannot silently start accepting trailing bytes.
         MALFORMED_ENVELOPE: "MalformedEnvelope"
     });
 
@@ -163,10 +182,14 @@ var owid = (function () {
         SIGNATURE_INVALID: "SignatureInvalid",
 
         // A signature field of the wrong length reached a verification surface
-        // directly. Truncation in raw external input is a read UNEXPECTED_END
-        // or BYTE_COUNT_MISMATCH instead, because there the envelope never
-        // formed. No surface in this library takes a signature on its own, so
-        // nothing reports this today.
+        // directly.
+        //
+        // Nothing produces this and no test can, because no surface in this
+        // library takes a signature on its own. A signature only ever arrives
+        // inside an envelope, where a wrong length is a parse failure,
+        // UNEXPECTED_END or BYTE_COUNT_MISMATCH, and the envelope never forms.
+        // The member is kept so a caller reading a status from any of the
+        // language ports finds the same vocabulary.
         INVALID_SIGNATURE_LENGTH: "InvalidSignatureLength",
 
         // No key could be obtained, or none covers the identifier's date. The
@@ -177,9 +200,13 @@ var owid = (function () {
         // required type. The fault is in the key, not the identifier.
         INVALID_KEY: "InvalidKey",
 
-        // The work required exceeds what this runtime can hold. Nothing
-        // reports this today, because an envelope this runtime could not hold
-        // could not have been read in the first place.
+        // The work required exceeds what this runtime can hold.
+        //
+        // Nothing produces this and no test can, because an envelope this
+        // runtime could not hold could not have been parsed in the first
+        // place, so no OWID exists to verify. The member is kept so a caller
+        // reading a status from any of the language ports finds the same
+        // vocabulary.
         IMPLEMENTATION_CAPACITY_EXCEEDED: "ImplementationCapacityExceeded",
 
         // The check could not be completed for a reason that is not the
@@ -248,7 +275,7 @@ var owid = (function () {
      * @param {Object} [details] - numbers describing the disagreement.
      * @returns {Object} the result.
      */
-    function readFailed(status, details) {
+    function parseFailed(status, details) {
         var r = { ok: false, owid: null, status: status };
         if (details !== undefined) {
             Object.keys(details).forEach(function (k) {
@@ -263,7 +290,7 @@ var owid = (function () {
      * @param {Object} instance - the OWID.
      * @returns {Object} the result.
      */
-    function readSucceeded(instance) {
+    function parseSucceeded(instance) {
         return Object.freeze({
             ok: true,
             owid: instance,
@@ -302,19 +329,25 @@ var owid = (function () {
      * no caller can change them afterwards.
      * @returns {Object} the result.
      */
-    function readOwid(bytes, data, owned) {
+    function parseOwid(bytes, data, owned) {
         var total = bytes.length;
         if (total === 0) {
-            return readFailed(ParseStatus.MISSING_INPUT);
+            return parseFailed(ParseStatus.MISSING_INPUT);
         }
 
         var at = 0;
         var version = bytes[at++];
         if (supportedVersions.indexOf(version) === -1) {
+            // Version zero is the empty marker, and it is refused here with
+            // every other version this library does not know. It carries no
+            // domain, date, payload or signature, so it can never verify, and
+            // an OWID with no signature reaching a caller is the one thing
+            // having no constructor exists to prevent.
+            //
             // Until 30 August 2026 an unknown version read no date at all and
             // carried on, so an envelope naming a version this library does
-            // not know could still be read as though it were understood.
-            return readFailed(
+            // not know could still be parsed as though it were understood.
+            return parseFailed(
                 ParseStatus.UNSUPPORTED_VERSION, { version: version });
         }
 
@@ -341,9 +374,9 @@ var owid = (function () {
             // past the maximum without terminating. The second is a domain
             // that cannot be valid rather than data that merely stopped.
             if (at >= total && (at - start) <= maximumDomainLength) {
-                return readFailed(ParseStatus.UNEXPECTED_END);
+                return parseFailed(ParseStatus.UNEXPECTED_END);
             }
-            return readFailed(ParseStatus.INVALID_DOMAIN_ENCODING);
+            return parseFailed(ParseStatus.INVALID_DOMAIN_ENCODING);
         }
 
         // The creation date, whose width depends on the version. Version 1
@@ -352,20 +385,20 @@ var owid = (function () {
         var date;
         if (version === 1) {
             if (total - at < 2) {
-                return readFailed(ParseStatus.UNEXPECTED_END);
+                return parseFailed(ParseStatus.UNEXPECTED_END);
             }
             date = ((bytes[at] << 8) | bytes[at + 1]) * 24 * 60;
             at += 2;
         } else {
             if (total - at < 4) {
-                return readFailed(ParseStatus.UNEXPECTED_END);
+                return parseFailed(ParseStatus.UNEXPECTED_END);
             }
             date = readUint32(bytes, at);
             at += 4;
         }
 
         if (total - at < 4) {
-            return readFailed(ParseStatus.UNEXPECTED_END);
+            return parseFailed(ParseStatus.UNEXPECTED_END);
         }
         var declared = readUint32(bytes, at);
         at += 4;
@@ -382,7 +415,7 @@ var owid = (function () {
         // signature the version requires.
         var present = (total - at) - signatureLength;
         if (present !== declared) {
-            return readFailed(ParseStatus.BYTE_COUNT_MISMATCH, {
+            return parseFailed(ParseStatus.BYTE_COUNT_MISMATCH, {
                 declared: declared,
                 present: present
             });
@@ -396,7 +429,7 @@ var owid = (function () {
             // Unreachable while the count check above holds, and kept so a
             // future change to that arithmetic cannot silently start accepting
             // trailing bytes.
-            return readFailed(ParseStatus.MALFORMED_ENVELOPE);
+            return parseFailed(ParseStatus.MALFORMED_ENVELOPE);
         }
 
         // The envelope is valid, so now, and only now, is it worth a copy. A
@@ -406,7 +439,7 @@ var owid = (function () {
         // always a plain Uint8Array, which parseBytes below guarantees, so
         // slice is a copy and not a view.
         var envelope = owned ? bytes : bytes.slice(0);
-        return readSucceeded(makeOwid(
+        return parseSucceeded(makeOwid(
             data, envelope, version, domain, date, payloadAt, signatureAt));
     }
 
@@ -417,16 +450,16 @@ var owid = (function () {
      */
     function parseBase64(value) {
         if (value === undefined || value === null || value === "") {
-            return readFailed(ParseStatus.MISSING_INPUT);
+            return parseFailed(ParseStatus.MISSING_INPUT);
         }
         if (typeof value !== "string") {
-            return readFailed(ParseStatus.INVALID_INPUT_TYPE);
+            return parseFailed(ParseStatus.INVALID_INPUT_TYPE);
         }
         var decoded = decodeBase64(value);
         if (decoded.status !== undefined) {
-            return readFailed(decoded.status);
+            return parseFailed(decoded.status);
         }
-        return readOwid(decoded.bytes, value, true);
+        return parseOwid(decoded.bytes, value, true);
     }
 
     /**
@@ -436,7 +469,7 @@ var owid = (function () {
      */
     function parseBytes(buffer) {
         if (buffer === undefined || buffer === null) {
-            return readFailed(ParseStatus.MISSING_INPUT);
+            return parseFailed(ParseStatus.MISSING_INPUT);
         }
         // Any view of single bytes is accepted, tested by the brand rather
         // than by instanceof, because instanceof asks whether the value came
@@ -444,13 +477,13 @@ var owid = (function () {
         // iframe or node's Buffer are a different realm's array and would be
         // refused as the wrong type, which they are not.
         if (!ArrayBuffer.isView(buffer) || buffer.BYTES_PER_ELEMENT !== 1) {
-            return readFailed(ParseStatus.INVALID_INPUT_TYPE);
+            return parseFailed(ParseStatus.INVALID_INPUT_TYPE);
         }
         // Read through a plain view over the same memory, so a signed byte
         // array reads as the unsigned bytes it holds and a view starting part
         // way into a larger buffer reads from where it starts. The view costs
         // nothing, so nothing is sized by the data before it is checked.
-        return readOwid(
+        return parseOwid(
             new Uint8Array(
                 buffer.buffer, buffer.byteOffset, buffer.byteLength),
             undefined,
@@ -588,7 +621,7 @@ var owid = (function () {
          * answered.
          */
         instance.verify = function (others) {
-            return asBoolean(instance.verifyDetailed(others));
+            return asBoolean(instance.checkSignature(others));
         };
 
         /**
@@ -599,7 +632,7 @@ var owid = (function () {
          * @returns {Promise} resolves to a frozen result carrying ok, status
          * and, where the check could not be completed, a message and a cause.
          */
-        instance.verifyDetailed = function (others) {
+        instance.checkSignature = function (others) {
             return Promise.resolve().then(function () {
                 var extra = othersAsBytes(others);
                 return hasSubtle()
@@ -620,7 +653,7 @@ var owid = (function () {
          */
         instance.verifyWithPublicKey = function (publicPem, others) {
             return asBoolean(
-                instance.verifyWithPublicKeyDetailed(publicPem, others));
+                instance.checkSignatureWithPublicKey(publicPem, others));
         };
 
         /**
@@ -632,7 +665,7 @@ var owid = (function () {
          * @returns {Promise} resolves to a frozen result carrying ok, status
          * and, where the check could not be completed, a message and a cause.
          */
-        instance.verifyWithPublicKeyDetailed = function (publicPem, others) {
+        instance.checkSignatureWithPublicKey = function (publicPem, others) {
             return Promise.resolve().then(function () {
                 var extra = othersAsBytes(others);
                 var subtle = getSubtle();
@@ -1012,7 +1045,7 @@ var owid = (function () {
                 throw failure(
                     SignatureStatus.VERIFICATION_ERROR,
                     "an other OWID must be a base 64 string or an OWID from " +
-                    "owid.tryParse, and a '" + typeof o + "' was supplied");
+                    "owid.parse, and a '" + typeof o + "' was supplied");
             }
         });
         return c;
@@ -1092,8 +1125,8 @@ var owid = (function () {
      * constructor it replaces.
      */
     function owid() {
-        throw "an OWID cannot be constructed. Use owid.tryParse to read one " +
-        "from base 64, or owid.tryParseBytes to read one from a byte array";
+        throw "an OWID cannot be constructed. Use owid.parse to read one " +
+        "from base 64, or owid.parseBytes to read one from a byte array";
     }
 
     /**
@@ -1112,9 +1145,10 @@ var owid = (function () {
      *
      * The value may be anything at all, because this is external data and
      * failing to be an OWID is an ordinary outcome rather than an error.
-     * Nothing is thrown, no key is fetched and no signature is checked. A
-     * successful read says the bytes are a structurally valid OWID, which is a
-     * different question from whether its signature is genuine.
+     * Nothing is thrown, which is deliberately unlike JSON.parse, and no key
+     * is fetched and no signature is checked. A successful parse says the
+     * bytes are a structurally valid OWID, which is a different question from
+     * whether its signature is genuine.
      *
      * @param {string} value - the OWID as base 64.
      * @returns {Object} a frozen result with ok, owid and status. On success
@@ -1122,7 +1156,7 @@ var owid = (function () {
      * failure ok is false, owid is null and status names the reason, with the
      * numbers that disagreed alongside it where there are any.
      */
-    owid.tryParse = function (value) {
+    owid.parse = function (value) {
         return parseBase64(value);
     };
 
@@ -1133,7 +1167,7 @@ var owid = (function () {
      * @param {Uint8Array} buffer - the OWID bytes.
      * @returns {Object} a frozen result with ok, owid and status.
      */
-    owid.tryParseBytes = function (buffer) {
+    owid.parseBytes = function (buffer) {
         return parseBytes(buffer);
     };
 
@@ -1153,7 +1187,7 @@ var owid = (function () {
      * Verifies each of the OWIDs supplied in its own right, which is what an
      * empty instance used to be created for.
      * @param {(Object|Object[]|string|string[])} owids - the OWIDs, as base 64
-     * strings or as OWIDs from tryParse.
+     * strings or as OWIDs from parse.
      * @returns {Promise} resolves to true when every one of them is genuine.
      */
     owid.verify = function (owids) {
@@ -1216,7 +1250,7 @@ var owid = (function () {
             return r;
         }
         throw "an OWID must be a base 64 string or an OWID from " +
-        "owid.tryParse, and a '" + typeof owids + "' was supplied";
+        "owid.parse, and a '" + typeof owids + "' was supplied";
     }
 
     /**
@@ -1227,7 +1261,7 @@ var owid = (function () {
      * @param {string} r - return url to come back to once stopped.
      * @returns {Promise} resolves once the redirect has been started.
      */
-    owid.stop = function (d, r) {
+    owid.stopAdvert = function (d, r) {
         var data = new URLSearchParams();
         data.append("host", d);
         data.append("returnUrl", r);
