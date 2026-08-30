@@ -33,6 +33,20 @@ Object.defineProperty(global.self, 'crypto', {
     }
 });
 
+/**
+ * Reads an OWID that the test expects to be valid, asserting the three facts
+ * a read always reports before handing back the OWID itself.
+ * @param {string} data - the OWID as base 64.
+ * @returns {Object} the OWID.
+ */
+function read(data) {
+    var r = owid.tryParse(data);
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe(owid.ParseStatus.PARSED);
+    expect(r.owid).not.toBeNull();
+    return r.owid;
+}
+
 // The expected payload of the utf8 fixtures once decoded as UTF-8.
 const utf8PayloadText = "Zürich ❤ OWID £€";
 
@@ -165,7 +179,7 @@ beforeEach(() => {
 fixtures.forEach(f => {
 
     test('interop verify ' + f.language + ' simple OWID passes', () => {
-        var o = new owid(f.simple);
+        var o = read(f.simple);
 
         return o.verify().then(valid => {
             expect(valid).toBe(true);
@@ -178,7 +192,7 @@ fixtures.forEach(f => {
     });
 
     test('interop verify ' + f.language + ' utf8 OWID passes', () => {
-        var o = new owid(f.utf8);
+        var o = read(f.utf8);
 
         return o.verify().then(valid => {
             expect(valid).toBe(true);
@@ -187,12 +201,12 @@ fixtures.forEach(f => {
 
     test('interop ' + f.language + ' utf8 payload decodes to the ' +
         'expected text', () => {
-        var o = new owid(f.utf8);
+        var o = read(f.utf8);
 
         // The parsed tree exposes the payload as a byte array. Decode the
         // bytes as UTF-8 rather than using payloadAsString, which maps each
         // byte to a character and would mangle multi byte sequences.
-        var text = Buffer.from(o.owid.payload).toString('utf8');
+        var text = Buffer.from(o.payload).toString('utf8');
         expect(text).toBe(utf8PayloadText);
     });
 
@@ -200,7 +214,7 @@ fixtures.forEach(f => {
         'passes', () => {
         // The party signature covers the party bytes followed by the
         // complete root OWID, so the root must be supplied to verify.
-        var party = new owid(f.chainParty);
+        var party = read(f.chainParty);
 
         return party.verify([f.chainRoot]).then(valid => {
             expect(valid).toBe(true);
@@ -211,7 +225,7 @@ fixtures.forEach(f => {
         'fails', () => {
         // Without the root OWID the signed message cannot be rebuilt, so
         // verification must fail.
-        var party = new owid(f.chainParty);
+        var party = read(f.chainParty);
 
         return party.verify().then(valid => {
             expect(valid).toBe(false);
@@ -221,7 +235,7 @@ fixtures.forEach(f => {
     test('interop verify ' + f.language + ' tampered OWID fails', () => {
         // Corrupt the last byte, which is always within the 64 byte
         // signature.
-        var o = new owid(corruptByte(f.simple, -1));
+        var o = read(corruptByte(f.simple, -1));
 
         return o.verify().then(valid => {
             expect(valid).toBe(false);

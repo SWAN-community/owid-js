@@ -15,96 +15,189 @@
  * ***************************************************************************/
 
 /**
- * @class {owid} Open Web Id (OWID) library for client side parsing and
- * verification of Open Web Ids. This library is verify only. Creation and
- * signing of OWIDs is performed by the server side implementations.
- * @param {string} data             - base 64 encoded byte array
- * @property {string} data          - The base 64 string the instance was created from.
- * @property {object} owid          - The OWID tree.
- * @property {string} domain        - Returns the creator of the OWID.
- * @property {int} date             - Returns the date and time the OWID was created as minutes since 2020-01-01 00:00.
- * @property {Uint8Array} signature - Returns the signature as byte array.
+ * Open Web Id (OWID) library for client side reading and verification of Open
+ * Web Ids. This library is verify only, so creation and signing of OWIDs is
+ * performed by the server side implementations.
+ *
+ * An OWID reaches calling code by exactly one route here, which is a
+ * successful read of a complete serialized OWID through owid.tryParse or
+ * owid.tryParseBytes. There is deliberately no way to build one, because an
+ * OWID is only worth anything for being signed, and an unsigned one is
+ * indistinguishable from a signed one to the code downstream of it, with the
+ * difference surfacing later where nobody is watching.
+ *
+ * Reading answers rather than throwing. The data comes from outside, so
+ * failing to be an OWID is an ordinary outcome rather than an error, and
+ * whoever sends the data chooses how often that happens and how large each
+ * attempt is.
  */
-var owid = function (data) {
+var owid = (function () {
     "use strict";
 
-    // Maximum length of the creator domain in the presentation form that
-    // an OWID stores, being the text "example.com" rather than the DNS
-    // wire format. RFC 1035 section 2.3.4, "Size limits", restricts the
-    // total length of a domain name, meaning its label octets and label
-    // length octets, to 255 octets or less. That wire format spends one
-    // length octet on every label and one zero octet on the root, whereas
-    // the presentation form writes a dot in place of each label length
-    // octet and has no text at all for the root octet, so the same
-    // published limit is 253 characters here. Both the read and the write
-    // are bounded by this one value, so it is declared here above the
-    // constructor body rather than with the other constants further down,
-    // because the constructor parses its data before execution reaches
-    // that region and a declaration there would not yet be initialised.
+    //#region constants
+
+    // The OWID signature is always 64 bytes and is the last thing in a valid
+    // OWID.
+    const signatureLength = 64;
+
+    // Maximum length of the creator domain in the presentation form that an
+    // OWID stores, being the text "example.com" rather than the DNS wire
+    // format. RFC 1035 section 2.3.4, "Size limits", restricts the total
+    // length of a domain name, meaning its label octets and label length
+    // octets, to 255 octets or less. That wire format spends one length octet
+    // on every label and one zero octet on the root, whereas the presentation
+    // form writes a dot in place of each label length octet and has no text at
+    // all for the root octet, so the same published limit is 253 characters
+    // here.
     const maximumDomainLength = 253;
 
-    //#region Constructor
+    // The versions this implementation knows how to read. Version 1 carries
+    // the creation date as two bytes of days, and versions 2 and 3 carry it as
+    // four bytes of minutes.
+    const supportedVersions = [1, 2, 3];
 
-    if (data !== undefined && typeof data !== "string") {
-        throw "'data' parameter must be a string or undefined";
-    }
+    // The base year for all OWID dates.
+    const ioDateBase = '2020-01-01T00:00:00';
 
-    // An empty string is treated as no data, the same as undefined, so
-    // the instance can still be used to verify other OWIDs. Parsing an
-    // empty string would be refused as an envelope with no version byte.
-    if (data !== undefined && data !== "") {
-        this.data = data;
-        this.owid = parse(data);
-        this.date = this.owid.date;
-        this.domain = this.owid.domain;
-        this.signature = this.owid.signature;
-    } else {
-        this.data = "";
-    }
+    // Maximum depth of multi-dimensional Arrays to traverse when verifying
+    // multiple OWIDs.
+    const maxVerifyDepth = 3;
 
-    //#endregion
-
-    //#region  constants
-
-    // Characters that are allowed in a base 64 string.
+    // Characters that are allowed in a base 64 string. Used to find the
+    // separators in a string that carries several OWIDs.
     const base64Characters = [
-        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", 
+        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
         "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
-        "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", 
+        "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
         "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
         "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
         "+", "/", "="
     ];
 
-    // RegEx special characters.
-    const regExpSpecials = [
-        "[", "\\", "^", "$", ".", "|", "?", "*", "+", "(", ")"
-    ];
-
-    // The base year for all OWID dates.
-    const ioDateBase = '2020-01-01T00:00:00';
-
-    // Maximum depth of multi-dimensional Arrays to traverse when verifying 
-    // multiple OWIDs.
-    const maxVerifyDepth = 3;
-
-    // Used to importing PEM keys and verification.
+    // Used for importing PEM keys and verification.
     const ECDSA = {
         name: "ECDSA",
         namedCurve: "P-256",
         hash: { name: "SHA-256" }
-    }
-    
-    //#endregion 
+    };
 
-    //#region private functions
+    //#endregion
+
+    //#region statuses
 
     /**
-     * Parses a base 64 byte array into an ascii string.
-     * @param {Uint8Array} v - byte array representation of an OWID tree.
+     * Why a read of external data succeeded or failed.
+     *
+     * These names are the cross-language vocabulary, so a failure means the
+     * same thing whichever language read the bytes. The values are stable
+     * strings rather than numbers so that a status can be logged as it is.
+     */
+    const ParseStatus = Object.freeze({
+
+        // The bytes form a structurally valid OWID. This says nothing about
+        // the signature, which is a separate question answered separately.
+        PARSED: "Parsed",
+
+        // Nothing was supplied to read.
+        MISSING_INPUT: "MissingInput",
+
+        // The input was supplied in a form this surface cannot read.
+        INVALID_INPUT_TYPE: "InvalidInputType",
+
+        // The string is not valid base 64, so there are no bytes to read.
+        INVALID_BASE64: "InvalidBase64",
+
+        // The first byte names a version this implementation does not know.
+        UNSUPPORTED_VERSION: "UnsupportedVersion",
+
+        // The data stopped in the middle of a field. Distinct from
+        // BYTE_COUNT_MISMATCH, which is a declaration that disagrees with data
+        // that is all present.
+        UNEXPECTED_END: "UnexpectedEnd",
+
+        // The creator domain is not terminated, or is longer than the
+        // published maximum.
+        INVALID_DOMAIN_ENCODING: "InvalidDomainEncoding",
+
+        // The declared payload byte count disagrees with the bytes actually
+        // present. Checked before anything is sized by the declaration, so a
+        // sender cannot make a reader allocate by claiming a large payload it
+        // did not send.
+        BYTE_COUNT_MISMATCH: "ByteCountMismatch",
+
+        // The envelope is structurally consistent but larger than this
+        // runtime can hold. Not a fault in the data, and deliberately distinct
+        // from the data being wrong, because the same bytes may be readable
+        // elsewhere.
+        IMPLEMENTATION_CAPACITY_EXCEEDED: "ImplementationCapacityExceeded",
+
+        // Malformed in a way none of the above describes. A fallback for the
+        // genuinely unclassified, not a substitute for naming a failure that
+        // is already understood.
+        MALFORMED_ENVELOPE: "MalformedEnvelope"
+    });
+
+    /**
+     * The outcome of asking whether an OWID's signature is genuine.
+     *
+     * Only two of these say anything about the signature itself. The rest say
+     * the question could not be answered, which is a different thing and must
+     * never be reported as a forgery. A key that cannot be fetched, a key that
+     * cannot be decoded, or a provider that fails leaves the signature
+     * unjudged, and a caller acting on "invalid" would reject good identifiers
+     * during an outage.
+     *
+     * On 30 August 2026 the key endpoints served PEM that a strict parser
+     * rejects and every offline verification against them failed, while the
+     * keys and the identifiers were both fine. Reported as INVALID_KEY that
+     * reads as the operational fault it was, and as SIGNATURE_INVALID it would
+     * have read as an attack.
+     */
+    const SignatureStatus = Object.freeze({
+
+        // The signature is genuine for this data and this key.
+        SIGNATURE_VALID: "SignatureValid",
+
+        // The signature is well formed and does not match. The only status
+        // that means the identifier should be distrusted.
+        SIGNATURE_INVALID: "SignatureInvalid",
+
+        // A signature field of the wrong length reached a verification surface
+        // directly. Truncation in raw external input is a read UNEXPECTED_END
+        // or BYTE_COUNT_MISMATCH instead, because there the envelope never
+        // formed. No surface in this library takes a signature on its own, so
+        // nothing reports this today.
+        INVALID_SIGNATURE_LENGTH: "InvalidSignatureLength",
+
+        // No key could be obtained, or none covers the identifier's date. The
+        // signature was never examined.
+        KEY_UNAVAILABLE: "KeyUnavailable",
+
+        // Key material arrived but cannot be decoded, imported or used as the
+        // required type. The fault is in the key, not the identifier.
+        INVALID_KEY: "InvalidKey",
+
+        // The work required exceeds what this runtime can hold. Nothing
+        // reports this today, because an envelope this runtime could not hold
+        // could not have been read in the first place.
+        IMPLEMENTATION_CAPACITY_EXCEEDED: "ImplementationCapacityExceeded",
+
+        // The check could not be completed for a reason that is not the
+        // identifier's fault, such as a verify end point failing, a malformed
+        // key response, or a cryptographic provider failing on valid inputs.
+        VERIFICATION_ERROR: "VerificationError"
+    });
+
+    //#endregion
+
+    //#region private base 64
+
+    /**
+     * Encodes a byte array as a base 64 string.
+     * @param {Uint8Array} v - the bytes.
      * @returns {string} base 64 string.
      */
-    function parseToString(v) {
+    function encodeBase64(v) {
         var binary = "";
         var len = v.byteLength;
         for (var i = 0; i < len; i++) {
@@ -114,327 +207,569 @@ var owid = function (data) {
     }
 
     /**
-     * Decode a base 64 string into a byte array.
-     * @param {string} v - an OWID tree encoded in base 64.
-     * @returns {Object} - a byte array.
+     * Decodes a base 64 string into a byte array, answering with a status
+     * rather than throwing. The string comes from outside, so not being base
+     * 64 is an ordinary outcome.
+     * @param {string} v - the base 64 string.
+     * @returns {Object} either { bytes } or { status }.
      */
-    function parseToByteArray(v) {
-        return Uint8Array.from(atob(v), c => c.charCodeAt(0));
-    }
-
-    /**
-     * Parses a base 64 encoded byte array into a OWID tree.
-     * @param {string} v - an OWID tree encoded in base 64.
-     * @returns {Object} - OWID tree.
-     */
-    function parse(v) {
-        // The OWID signature is always 64 bytes and is the last thing in a
-        // valid OWID.
-        var signatureLength = 64;
-
-        // Refuses a read of n bytes that would run past the end of the
-        // buffer. Every count in the byte array is whatever the sender
-        // declared, so each read is bounded by the bytes actually present
-        // rather than trusting the count.
-        function checkPresent(b, n, what) {
-            if (b.index + n > b.array.length) {
-                throw "OWID " + what + " needs '" + n + "' bytes but " +
-                    "only '" + (b.array.length - b.index) + "' are present";
-            }
-        }
-
-        function readByte(b) {
-            checkPresent(b, 1, "byte");
-            return b.array[b.index++];
-        }
-
-        // Reads the zero terminated creator domain. The scan stops at the
-        // end of the buffer, so a domain with no zero terminator before the
-        // end is refused rather than the index moving past the end, and it
-        // also stops one byte past the published maximum, so a buffer whose
-        // domain field never terminates costs the maximum rather than the
-        // length of whatever was sent.
-        function readString(b) {
-            var r = "";
-            var end = Math.min(
-                b.array.length,
-                b.index + maximumDomainLength + 1);
-            while (b.index < end && b.array[b.index] != 0) {
-                r += String.fromCharCode(b.array[b.index++]);
-            }
-            if (r.length > maximumDomainLength) {
-                throw "OWID domain is not terminated within the '" +
-                    maximumDomainLength + "' character maximum";
-            }
-            checkPresent(b, 1, "string terminator");
-            b.index++;
-            return r;
-        }
-
-        function readUint32(b) {
-            checkPresent(b, 4, "32 bit integer");
-            // The unsigned shift at the end keeps the result unsigned, as
-            // the bitwise operators otherwise make a count with the top
-            // bit set negative.
-            return (b.array[b.index++] |
-                b.array[b.index++] << 8 |
-                b.array[b.index++] << 16 |
-                b.array[b.index++] << 24) >>> 0;
-        }
-
-        // Reads the length-prefixed payload. The count is whatever the
-        // sender declared, so it is checked against the bytes actually
-        // present before anything is sized by it. A valid OWID is the
-        // declared payload followed by the signature and nothing else, so
-        // the count must equal the bytes remaining less the signature
-        // length, and any other count, short or long, is refused here.
-        // Until 28 August 2026 the count went straight to slice, and as
-        // the count was read as a signed integer a top bit set moved the
-        // index backwards, so a malformed OWID parsed to something rather
-        // than being refused.
-        function readByteArray(b) {
-            var c = readUint32(b);
-            var remaining = b.array.length - b.index;
-            if (remaining !== c + signatureLength) {
-                throw "OWID payload length '" + c + "' does not match the '" +
-                    remaining + "' bytes present, of which the final '" +
-                    signatureLength + "' must be the signature";
-            }
-            // Preserve the public parser's long-standing ownership model:
-            // callers receive a payload with its own backing buffer.
-            var r = b.array.slice(b.index, b.index + c)
-            b.index += c;
-            return r;
-        }
-
-        function readDate(b, v) {
-            if (v == 1) {
-                var h = readByte(b);
-                var l = readByte(b);
-                return (h << 8 | l) * 24 * 60;
-            }
-            if (v == 2 || v == 3) {
-                return readUint32(b);
-            }
-        }
-
-        function readSignature(b) {
-            var c = signatureLength;
-            // The payload check leaves exactly the signature, and this
-            // check keeps that true if the payload read ever changes.
-            if (b.array.length - b.index !== c) {
-                throw "OWID signature length '" + (b.array.length - b.index) +
-                    "' not compatible with '" + c + "' OWID signature length";
-            }
-            var r = b.array.slice(b.index, b.index + c)
-            b.index += c;
-            return r;
-        }
-
-        function readOWID(b) {
-            var o = Object();
-            o.version = readByte(b);
-            o.domain = readString(b);
-            o.date = readDate(b, o.version);
-            o.payload = readByteArray(b);
-            o.signature = readSignature(b);
-            o.payloadAsString = function () {
-                var s = "";
-                Uint8Array.from(this.payload, c => s += String.fromCharCode(c));
-                return s;
+    function decodeBase64(v) {
+        var binary;
+        try {
+            binary = atob(v);
+        } catch (e) {
+            // A RangeError means the decoded string would not fit, which is
+            // this runtime running out of room rather than the data being
+            // wrong. Anything else from atob means the characters are not
+            // base 64. The two are kept apart because the same bytes may be
+            // readable in a runtime with more room.
+            return {
+                status: e instanceof RangeError
+                    ? ParseStatus.IMPLEMENTATION_CAPACITY_EXCEEDED
+                    : ParseStatus.INVALID_BASE64
             };
-            o.payloadAsPrintable = function () {
-                var s = "";
-                Uint8Array.from(this.payload, c => s += (c & 0xFF).toString(16));
-                return s;
-            }
-            return o
         }
-
-        // Decode the base64 string into a byte array.
-        var b = Object();
-        b.index = 0;
-        b.array = parseToByteArray(v);
-
-        // Unpack the byte array into the OWID tree.
-        var q = [];
-        var r = readOWID(b);
-        q.push(r);
-        while (q.length > 0) {
-            var n = q.shift();
-            for (var i = 0; i < n.count; i++) {
-                var c = readOWID(b);
-                n.children.push(c)
-                c.parent = n
-                q.push(c)
-            }
-        }
-
-        return r;
-    }
-
-    /**
-     * Get the byte array representation of an OWID tree.
-     * @param {Object} t - OWID tree object.
-     * @returns {Uint8Array} Array of bytes.
-     */
-    function getByteArray(t) {
-        var buffer;
-        var dataView;
-        var position;
-
-        // Refuse a domain longer than the maximum the read enforces, before
-        // anything is sized, written or signed over. A domain reaches this
-        // library either inside an OWID that is parsed, where the read bound
-        // above refuses an over long one, or inside an OWID tree object
-        // handed to verify or verifyWithPublicKey by a caller, and this is
-        // the first point that tree is used. Without the check here the
-        // library would write an over long domain into the bytes a
-        // signature is checked over, and into the data posted to another
-        // implementation's verify end point, which that implementation
-        // refuses to read.
-        if (t.domain && t.domain.length > maximumDomainLength) {
-            throw "OWID domain of '" + t.domain.length + "' characters is " +
-                "longer than the '" + maximumDomainLength + "' character " +
-                "maximum";
-        }
-
-        function writeByte(v) {
-            buffer[position++] = v;
-        }
-
-        function writeString(v) {
-            for (var i = 0; i < v.length; i++) {
-                writeByte(v.charCodeAt(i));
-            }
-            writeByte(0);
-        }
-
-        function writeUint32(v) {
-            dataView.setUint32(position, v, true);
-            position += 4;
-        }
-
-        function writeByteArray(v) {
-            writeUint32(v.length);
-            buffer.set(v, position);
-            position += v.length;
-        }
-
-        if (t.version && t.domain && t.date && t.payload) {
-            var length = 1 + t.domain.length + 1 + 4 + 4 + t.payload.length;
-            buffer = new Uint8Array(length);
-            dataView = new DataView(buffer.buffer);
-            position = 0;
-            writeByte(t.version);
-            writeString(t.domain);
-            writeUint32(t.date);
-            writeByteArray(t.payload);
-            return buffer;
+        try {
+            return { bytes: Uint8Array.from(binary, c => c.charCodeAt(0)) };
+        } catch (e) {
+            return { status: ParseStatus.IMPLEMENTATION_CAPACITY_EXCEEDED };
         }
     }
 
+    //#endregion
+
+    //#region private reading
+
     /**
-     * Use the well known end point for the alleged OWID creator. 
-     * @param {*} p - parent OWID as base 64 encoded byte array.
-     * @param {string} t - base 64 encoded byte array representing an OWID tree.
-     * @returns {Promise} Promise resolves to true if OWID is valid.
+     * A read that did not produce an OWID. The details name the numbers that
+     * disagreed, never the input itself, because a reader logging a failure
+     * must not log whatever an untrusted sender chose to put in it.
+     * @param {string} status - the ParseStatus.
+     * @param {Object} [details] - numbers describing the disagreement.
+     * @returns {Object} the result.
      */
-    function verifyOWIDWithAPI(p, t) {
-        var o = parse(t);
-        return verifyOWIDObjectWithAPI(p, t, o);
+    function readFailed(status, details) {
+        var r = { ok: false, owid: null, status: status };
+        if (details !== undefined) {
+            Object.keys(details).forEach(function (k) {
+                r[k] = details[k];
+            });
+        }
+        return Object.freeze(r);
     }
 
     /**
-     * Use the well known end point for the alleged OWID creator. 
-     * @param {*} p - parent OWID as base 64 encoded byte array.
-     * @param {string} t - base 64 encoded byte array representing an OWID tree.
-     * @param {Object} o - an OWID tree.
-     * @returns {Promise} Promise resolves to true if OWID is valid.
+     * A read that produced an OWID.
+     * @param {Object} instance - the OWID.
+     * @returns {Object} the result.
      */
-    function verifyOWIDObjectWithAPI(p, t, o) {
-        var data = new URLSearchParams();
-        data.append("parent", p);
-        data.append("owid", t);
-        var url = "//" + o.domain + "/owid/api/v" + o.version + "/verify";
-        return fetch(url,
-            {
-                method: "POST",
-                mode: "cors",
-                cache: "no-cache",
-                headers: owid.fetchHeaders,
-                body: data
-            })
-            .then(r => {
-                if (r.ok) {
-                    return r.json();
+    function readSucceeded(instance) {
+        return Object.freeze({
+            ok: true,
+            owid: instance,
+            status: ParseStatus.PARSED
+        });
+    }
+
+    /**
+     * Reads an unsigned 32 bit little endian count. The unsigned shift at the
+     * end keeps the result unsigned, as the bitwise operators otherwise make a
+     * count with the top bit set negative.
+     * @param {Uint8Array} bytes - the buffer.
+     * @param {number} at - the offset of the first byte.
+     * @returns {number} the count.
+     */
+    function readUint32(bytes, at) {
+        return (bytes[at] |
+            bytes[at + 1] << 8 |
+            bytes[at + 2] << 16 |
+            bytes[at + 3] << 24) >>> 0;
+    }
+
+    /**
+     * Reads a complete OWID from a buffer holding exactly one.
+     *
+     * The buffer is walked by index and every read is checked against what is
+     * left, so a malformed envelope is a comparison that fails rather than an
+     * exception that is built and unwound. That matters because whoever is
+     * sending the data chooses how often this fails and how large each attempt
+     * is.
+     *
+     * @param {Uint8Array} bytes - the envelope.
+     * @param {string} [data] - the base 64 the bytes came from, when the
+     * caller already has it.
+     * @param {boolean} owned - true when the bytes belong to this library and
+     * no caller can change them afterwards.
+     * @returns {Object} the result.
+     */
+    function readOwid(bytes, data, owned) {
+        var total = bytes.length;
+        if (total === 0) {
+            return readFailed(ParseStatus.MISSING_INPUT);
+        }
+
+        var at = 0;
+        var version = bytes[at++];
+        if (supportedVersions.indexOf(version) === -1) {
+            // Until 30 August 2026 an unknown version read no date at all and
+            // carried on, so an envelope naming a version this library does
+            // not know could still be read as though it were understood.
+            return readFailed(
+                ParseStatus.UNSUPPORTED_VERSION, { version: version });
+        }
+
+        // The creator domain, stored as ASCII and terminated by a zero byte.
+        // The scan stops at the end of the buffer, so a domain with no
+        // terminator before the end is refused rather than the index moving
+        // past the end, and it also stops one byte past the published maximum,
+        // so a buffer whose domain field never terminates costs the maximum
+        // rather than the length of whatever was sent.
+        var start = at;
+        var limit = Math.min(total, start + maximumDomainLength + 1);
+        var domain = null;
+        var text = "";
+        while (at < limit) {
+            if (bytes[at] === 0) {
+                domain = text;
+                at++;
+                break;
+            }
+            text += String.fromCharCode(bytes[at++]);
+        }
+        if (domain === null) {
+            // Either the buffer ended inside the domain, or the domain ran
+            // past the maximum without terminating. The second is a domain
+            // that cannot be valid rather than data that merely stopped.
+            if (at >= total && (at - start) <= maximumDomainLength) {
+                return readFailed(ParseStatus.UNEXPECTED_END);
+            }
+            return readFailed(ParseStatus.INVALID_DOMAIN_ENCODING);
+        }
+
+        // The creation date, whose width depends on the version. Version 1
+        // counts days and the later versions count minutes, and both are
+        // reported here as minutes since the OWID base date.
+        var date;
+        if (version === 1) {
+            if (total - at < 2) {
+                return readFailed(ParseStatus.UNEXPECTED_END);
+            }
+            date = ((bytes[at] << 8) | bytes[at + 1]) * 24 * 60;
+            at += 2;
+        } else {
+            if (total - at < 4) {
+                return readFailed(ParseStatus.UNEXPECTED_END);
+            }
+            date = readUint32(bytes, at);
+            at += 4;
+        }
+
+        if (total - at < 4) {
+            return readFailed(ParseStatus.UNEXPECTED_END);
+        }
+        var declared = readUint32(bytes, at);
+        at += 4;
+
+        // The declaration is the sender's claim about a payload not yet read,
+        // so it is compared with what is actually present before anything is
+        // sized by it. The subtraction is ordinary Number arithmetic, which
+        // represents both an unsigned 32 bit count and this difference
+        // exactly, so a buffer with fewer bytes left than a signature needs
+        // gives a negative count rather than wrapping, and a negative count
+        // can never equal a declaration. Reporting that as a truncation would
+        // name a different fault for the same evidence, because what is
+        // certain is that the declared payload cannot leave exactly the
+        // signature the version requires.
+        var present = (total - at) - signatureLength;
+        if (present !== declared) {
+            return readFailed(ParseStatus.BYTE_COUNT_MISMATCH, {
+                declared: declared,
+                present: present
+            });
+        }
+
+        var payloadAt = at;
+        at += declared;
+        var signatureAt = at;
+        at += signatureLength;
+        if (at !== total) {
+            // Unreachable while the count check above holds, and kept so a
+            // future change to that arithmetic cannot silently start accepting
+            // trailing bytes.
+            return readFailed(ParseStatus.MALFORMED_ENVELOPE);
+        }
+
+        // The envelope is valid, so now, and only now, is it worth a copy. A
+        // buffer handed in by a caller is copied so that the caller changing
+        // their array afterwards cannot change an OWID whose signature is
+        // checked over the bytes as they arrived. The bytes reaching here are
+        // always a plain Uint8Array, which parseBytes below guarantees, so
+        // slice is a copy and not a view.
+        var envelope = owned ? bytes : bytes.slice(0);
+        return readSucceeded(makeOwid(
+            data, envelope, version, domain, date, payloadAt, signatureAt));
+    }
+
+    /**
+     * Reads a complete OWID from its base 64 form.
+     * @param {string} value - the base 64 string.
+     * @returns {Object} the result.
+     */
+    function parseBase64(value) {
+        if (value === undefined || value === null || value === "") {
+            return readFailed(ParseStatus.MISSING_INPUT);
+        }
+        if (typeof value !== "string") {
+            return readFailed(ParseStatus.INVALID_INPUT_TYPE);
+        }
+        var decoded = decodeBase64(value);
+        if (decoded.status !== undefined) {
+            return readFailed(decoded.status);
+        }
+        return readOwid(decoded.bytes, value, true);
+    }
+
+    /**
+     * Reads a complete OWID from a buffer holding exactly one.
+     * @param {Uint8Array} buffer - the envelope.
+     * @returns {Object} the result.
+     */
+    function parseBytes(buffer) {
+        if (buffer === undefined || buffer === null) {
+            return readFailed(ParseStatus.MISSING_INPUT);
+        }
+        // Any view of single bytes is accepted, tested by the brand rather
+        // than by instanceof, because instanceof asks whether the value came
+        // from this realm's Uint8Array. Bytes handed over from a worker, an
+        // iframe or node's Buffer are a different realm's array and would be
+        // refused as the wrong type, which they are not.
+        if (!ArrayBuffer.isView(buffer) || buffer.BYTES_PER_ELEMENT !== 1) {
+            return readFailed(ParseStatus.INVALID_INPUT_TYPE);
+        }
+        // Read through a plain view over the same memory, so a signed byte
+        // array reads as the unsigned bytes it holds and a view starting part
+        // way into a larger buffer reads from where it starts. The view costs
+        // nothing, so nothing is sized by the data before it is checked.
+        return readOwid(
+            new Uint8Array(
+                buffer.buffer, buffer.byteOffset, buffer.byteLength),
+            undefined,
+            false);
+    }
+
+    //#endregion
+
+    //#region private instances
+
+    // Every OWID this library has read, against the bytes it was read from.
+    // Nothing outside can add to it, so membership is how internal code tells
+    // a real OWID from an object that merely looks like one, and the bytes
+    // are what a signature covering this OWID is checked over when it is
+    // named as another OWID somewhere else.
+    const instances = new WeakMap();
+
+    /**
+     * Builds the OWID that a successful read hands back. The fields are read
+     * only and the byte arrays are handed out as copies, because a parsed
+     * OWID's signature covers its fields as they arrived, so a caller able to
+     * change one would hold something whose signature no longer describes it.
+     *
+     * This function is private to the module and nothing outside can reach it,
+     * so a successful read is the only route by which an OWID arrives in
+     * calling code.
+     *
+     * @param {string} [data] - the base 64 the envelope came from, computed on
+     * demand when the envelope came from raw bytes.
+     * @param {Uint8Array} envelope - the complete OWID bytes.
+     * @param {number} version - the version byte.
+     * @param {string} domain - the creator domain.
+     * @param {number} date - minutes since the OWID base date.
+     * @param {number} payloadAt - offset of the first payload byte.
+     * @param {number} signatureAt - offset of the first signature byte.
+     * @returns {Object} the OWID.
+     */
+    function makeOwid(
+        data, envelope, version, domain, date, payloadAt, signatureAt) {
+
+        // Views over the one envelope buffer, used by this library only. The
+        // public accessors below copy, so nothing a caller holds shares
+        // storage with the OWID or with another field of it.
+        var payloadView = envelope.subarray(payloadAt, signatureAt);
+        var signatureView = envelope.subarray(signatureAt);
+        var unsignedView = envelope.subarray(0, signatureAt);
+
+        var instance = {};
+
+        Object.defineProperties(instance, {
+            data: {
+                enumerable: true,
+                get: function () {
+                    if (data === undefined) {
+                        data = encodeBase64(envelope);
+                    }
+                    return data;
                 }
-                return fetchError("Verify", r);
-            })
-            .then(r => r.valid);
-    }
-
-    /**
-     * Verify the payload of this OWID is the signature of the parent OWID.
-     * @param {*} r - parent OWID as base 64 encoded byte array.
-     * @param {string} t - base 64 encoded byte array representing an OWID tree.
-     * @returns {Promise} Promise resolves to true if OWID is valid.
-     */
-    function verifyOWIDWithPublicKey(r, t) {
-        var o = parse(t);
-        return verifyOWIDObjectWithPublicKey(r, o);
-    }
-
-    function importEcdsaKey(pem) {
-        // Remove the header, footer and line breaks to get the PEM content.
-        var lines = pem.split('\n');
-        var pemContents = '';
-        for (var i = 0; i < lines.length; i++) {
-            if (lines[i].trim().length > 0 &&
-                lines[i].indexOf('-----BEGIN PUBLIC KEY-----') < 0 &&
-                lines[i].indexOf('-----END PUBLIC KEY-----') < 0) {
-                pemContents += lines[i].trim();
+            },
+            version: {
+                enumerable: true,
+                get: function () { return version; }
+            },
+            domain: {
+                enumerable: true,
+                get: function () { return domain; }
+            },
+            date: {
+                enumerable: true,
+                get: function () { return date; }
+            },
+            payload: {
+                enumerable: true,
+                get: function () { return new Uint8Array(payloadView); }
+            },
+            signature: {
+                enumerable: true,
+                get: function () { return new Uint8Array(signatureView); }
             }
-        }
+        });
 
-        // Guard against an empty or header only PEM, where there is no key
-        // data to decode. Without this the atob call below yields an empty
-        // array and importKey rejects with an opaque DOMException.
-        if (!pemContents) {
-            throw "public key PEM contains no key data";
-        }
+        /**
+         * Returns the OWID creation date as a JavaScript Date object accurate
+         * to the minute.
+         * @returns {Date} the creation date.
+         */
+        instance.dateAsJavaScriptDate = function () {
+            var jsDate = new Date();
+            jsDate.setTime(new Date(ioDateBase).getTime() + (date * 60 * 1000));
+            return jsDate;
+        };
 
-        // Import the public key with the SHA-256 hash algorithm.
-        return window.crypto.subtle.importKey(
-            "spki",
-            Uint8Array.from(atob(pemContents), c => c.charCodeAt(0)),
-            ECDSA,
-            false,
-            ["verify"]
-        );
+        /**
+         * Returns the payload as a string, one character per byte.
+         * @returns {string} the payload.
+         */
+        instance.payloadAsString = function () {
+            var s = "";
+            for (var i = 0; i < payloadView.length; i++) {
+                s += String.fromCharCode(payloadView[i]);
+            }
+            return s;
+        };
+
+        /**
+         * Returns the payload in hexadecimal. Single digit values are not
+         * padded with a leading zero.
+         * @returns {string} the payload in hexadecimal.
+         */
+        instance.payloadAsPrintable = function () {
+            var s = "";
+            for (var i = 0; i < payloadView.length; i++) {
+                s += (payloadView[i] & 0xFF).toString(16);
+            }
+            return s;
+        };
+
+        /**
+         * Returns the payload as a base 64 string.
+         * @returns {string} the payload as base 64.
+         */
+        instance.payloadAsBase64 = function () {
+            return encodeBase64(payloadView);
+        };
+
+        /**
+         * Verifies this OWID, optionally together with other OWIDs that the
+         * same signature covered. Where the runtime provides Web Crypto the
+         * creator's public key is fetched and the signature checked here, and
+         * where it does not the creator's verify end point is asked instead.
+         * @param {(Object|Object[]|string|string[])} [others] - other OWIDs
+         * covered by the signature, in the order they were signed.
+         * @returns {Promise} resolves to true when the signature is genuine
+         * and false when it is not, and rejects when the question could not be
+         * answered.
+         */
+        instance.verify = function (others) {
+            return asBoolean(instance.verifyDetailed(others));
+        };
+
+        /**
+         * Verifies this OWID and reports the outcome as a named status, so
+         * that "could not check" stays apart from "does not match".
+         * @param {(Object|Object[]|string|string[])} [others] - other OWIDs
+         * covered by the signature, in the order they were signed.
+         * @returns {Promise} resolves to a frozen result carrying ok, status
+         * and, where the check could not be completed, a message and a cause.
+         */
+        instance.verifyDetailed = function (others) {
+            return Promise.resolve().then(function () {
+                var extra = othersAsBytes(others);
+                return hasSubtle()
+                    ? verifyWithCreatorKey(instance, unsignedView, extra)
+                    : verifyWithCreatorApi(instance, extra);
+            }).catch(asSignatureResult);
+        };
+
+        /**
+         * Verifies this OWID offline against a caller supplied SPKI public key
+         * PEM, contacting no network end point.
+         * @param {string} publicPem - the creator public key in SPKI PEM form.
+         * @param {(Object|Object[]|string|string[])} [others] - other OWIDs
+         * covered by the signature, in the order they were signed.
+         * @returns {Promise} resolves to true when the signature is genuine
+         * and false when it is not, and rejects when the question could not be
+         * answered.
+         */
+        instance.verifyWithPublicKey = function (publicPem, others) {
+            return asBoolean(
+                instance.verifyWithPublicKeyDetailed(publicPem, others));
+        };
+
+        /**
+         * Verifies this OWID offline against a caller supplied SPKI public key
+         * PEM and reports the outcome as a named status.
+         * @param {string} publicPem - the creator public key in SPKI PEM form.
+         * @param {(Object|Object[]|string|string[])} [others] - other OWIDs
+         * covered by the signature, in the order they were signed.
+         * @returns {Promise} resolves to a frozen result carrying ok, status
+         * and, where the check could not be completed, a message and a cause.
+         */
+        instance.verifyWithPublicKeyDetailed = function (publicPem, others) {
+            return Promise.resolve().then(function () {
+                var extra = othersAsBytes(others);
+                var subtle = getSubtle();
+                return importSpkiKey(subtle, publicPem).then(function (key) {
+                    return checkSignature(
+                        subtle, key, signatureView, unsignedView, extra);
+                }, function (e) {
+                    throw failure(
+                        SignatureStatus.INVALID_KEY,
+                        "the public key could not be imported",
+                        e);
+                });
+            }).catch(asSignatureResult);
+        };
+
+        Object.freeze(instance);
+        instances.set(instance, envelope);
+        return instance;
+    }
+
+    //#endregion
+
+    //#region private verification
+
+    /**
+     * A verification that could not be completed, carried through the promise
+     * chain so that the status survives to the caller.
+     * @param {string} status - the SignatureStatus.
+     * @param {string} message - what went wrong, never containing the input.
+     * @param {*} [cause] - the original failure, so that a caller of verify
+     * sees what it would have seen before.
+     * @returns {Object} the carrier.
+     */
+    function failure(status, message, cause) {
+        return {
+            isOwidVerificationFailure: true,
+            status: status,
+            message: message,
+            cause: cause
+        };
     }
 
     /**
-     * Resolve the Web Crypto SubtleCrypto implementation in a way that works
-     * both in the browser and in Node (where it is on globalThis.crypto).
+     * Turns whatever came out of a verification into a result. Anything that
+     * is not one of this library's own carriers is a failure of the check
+     * rather than a judgement on the signature, so it never becomes
+     * SIGNATURE_INVALID.
+     * @param {*} e - the value the chain rejected with.
+     * @returns {Object} the result.
      */
-    function getSubtle() {
+    function asSignatureResult(e) {
+        if (e && e.isOwidVerificationFailure === true) {
+            return Object.freeze({
+                ok: false,
+                status: e.status,
+                message: e.message,
+                cause: e.cause
+            });
+        }
+        return Object.freeze({
+            ok: false,
+            status: SignatureStatus.VERIFICATION_ERROR,
+            message: "the signature could not be checked",
+            cause: e
+        });
+    }
+
+    /**
+     * Reduces a detailed verification to the boolean the plain verify methods
+     * promise. Only the two statuses that judge the signature resolve and
+     * everything else rejects, because a caller told false would treat an
+     * outage as a forgery.
+     * @param {Promise} detailed - the detailed verification.
+     * @returns {Promise} resolves to true or false, or rejects.
+     */
+    function asBoolean(detailed) {
+        return detailed.then(function (r) {
+            if (r.status === SignatureStatus.SIGNATURE_VALID) {
+                return true;
+            }
+            if (r.status === SignatureStatus.SIGNATURE_INVALID) {
+                return false;
+            }
+            throw r.cause !== undefined ? r.cause : r.message;
+        });
+    }
+
+    /**
+     * The Web Crypto SubtleCrypto implementation, in a way that works both in
+     * the browser and in Node, where it is on globalThis.crypto.
+     * @returns {Object} the implementation, or undefined when there is none.
+     */
+    function findSubtle() {
         var c = (typeof globalThis !== "undefined" && globalThis.crypto)
             ? globalThis.crypto
             : (typeof window !== "undefined" ? window.crypto : undefined);
-        if (!c || !c.subtle) {
-            throw "Web Crypto (crypto.subtle) is not available in this " +
-                "environment";
-        }
-        return c.subtle;
+        return c ? c.subtle : undefined;
     }
 
     /**
-     * Import an SPKI public key PEM using the supplied SubtleCrypto. Unlike
-     * importEcdsaKey this does not depend on the browser global and is used by
-     * the offline verifyWithPublicKey below.
+     * True when this runtime provides Web Crypto, which decides whether a
+     * signature is checked here or by the creator's verify end point.
+     * @returns {boolean} whether crypto.subtle is available.
+     */
+    function hasSubtle() {
+        return !!findSubtle();
+    }
+
+    /**
+     * The Web Crypto SubtleCrypto implementation, refusing the verification
+     * when the runtime has none.
+     * @returns {Object} the implementation.
+     */
+    function getSubtle() {
+        var subtle = findSubtle();
+        if (!subtle) {
+            throw failure(
+                SignatureStatus.VERIFICATION_ERROR,
+                "Web Crypto (crypto.subtle) is not available in this " +
+                "environment");
+        }
+        return subtle;
+    }
+
+    /**
+     * Imports an SPKI public key PEM.
+     * @param {Object} subtle - the SubtleCrypto implementation.
+     * @param {string} pem - the key in SPKI PEM form.
+     * @returns {Promise} resolves to the imported key.
      */
     function importSpkiKey(subtle, pem) {
+        if (typeof pem !== "string") {
+            throw failure(
+                SignatureStatus.INVALID_KEY,
+                "public key PEM must be a string",
+                "public key PEM contains no key data");
+        }
         var lines = pem.split('\n');
         var contents = '';
         for (var i = 0; i < lines.length; i++) {
@@ -443,407 +778,493 @@ var owid = function (data) {
                 contents += line;
             }
         }
+        // Guard against an empty or header only PEM, where there is no key
+        // data to decode. Without this the decode below yields an empty array
+        // and importKey rejects with an opaque DOMException.
         if (!contents) {
-            throw "public key PEM contains no key data";
+            throw failure(
+                SignatureStatus.INVALID_KEY,
+                "public key PEM contains no key data",
+                "public key PEM contains no key data");
+        }
+        var decoded = decodeBase64(contents);
+        if (decoded.status !== undefined) {
+            throw failure(
+                SignatureStatus.INVALID_KEY,
+                "public key PEM is not valid base 64",
+                "public key PEM contains no key data");
         }
         return subtle.importKey(
-            "spki",
-            Uint8Array.from(atob(contents), c => c.charCodeAt(0)),
-            ECDSA,
-            false,
-            ["verify"]
-        );
+            "spki", decoded.bytes, ECDSA, false, ["verify"]);
     }
 
     /**
-     * Verify the payload of this OWID is the signature of the parent OWID.
-     * @param {*} r - parent OWID as base 64 encoded byte array.
-     * @param {Object} o - an OWID tree.
-     * @returns {Promise} Promise resolves to true if OWID is valid.
+     * Checks a signature over the OWID's own bytes followed by the bytes of
+     * any other OWIDs the same signature covered.
+     * @param {Object} subtle - the SubtleCrypto implementation.
+     * @param {Object} key - the imported public key.
+     * @param {Uint8Array} signature - the signature bytes.
+     * @param {Uint8Array} unsigned - this OWID without its signature.
+     * @param {Uint8Array[]} extra - the other OWIDs' complete bytes.
+     * @returns {Promise} resolves to a result.
      */
-    function verifyOWIDObjectWithPublicKey(r, o) {
-        var url = "//" + o.domain + "/owid/api/v1/creator";
-        if (o.date != null) {
-            // Request the key that was current when this OWID was signed, so
-            // OWIDs created before a key rotation still verify.
-            url += "?date=" + o.date;
-        }
-        return fetch(
-            url,
-            {
-                mode: "cors",
-                cache: "default",
-                headers: owid.fetchHeaders
-            })
-            .then(r => {
-                if (r.ok) {
-                    return r.json()    
-                }
-                return fetchError("Creator", r);
-            })
-            .then(c => importEcdsaKey(c.publicKeySPKI))
-            .then(k => {
-                var a = getByteArray(o);
-                var b = Uint8Array.from(atob(r), c => c.charCodeAt(0));
-                var m = new Uint8Array(a.length + b.length);
-                m.set(a);
-                m.set(b, a.length);                
-                return crypto.subtle.verify(
-                    ECDSA,
-                    k,
-                    o.signature,
-                    m);
+    function checkSignature(subtle, key, signature, unsigned, extra) {
+        var total = unsigned.length;
+        extra.forEach(function (p) { total += p.length; });
+        var message = new Uint8Array(total);
+        message.set(unsigned);
+        var offset = unsigned.length;
+        extra.forEach(function (p) {
+            message.set(p, offset);
+            offset += p.length;
+        });
+        return subtle.verify(ECDSA, key, signature, message).then(
+            function (valid) {
+                return Object.freeze({
+                    ok: valid === true,
+                    status: valid === true
+                        ? SignatureStatus.SIGNATURE_VALID
+                        : SignatureStatus.SIGNATURE_INVALID
+                });
+            },
+            function (e) {
+                throw failure(
+                    SignatureStatus.VERIFICATION_ERROR,
+                    "the cryptographic provider could not check the signature",
+                    e);
             });
     }
 
     /**
-     * Throw error from fetch response.
-     * @param {string} n - Name of the fetch call
-     * @param {Object} r - Response object
+     * Fetches the creator's public key and checks the signature here. The key
+     * is requested for the OWID's own creation date, so OWIDs signed before a
+     * key rotation still verify.
+     * @param {Object} instance - the OWID being verified.
+     * @param {Uint8Array} unsigned - the OWID without its signature.
+     * @param {Uint8Array[]} extra - the other OWIDs' complete bytes.
+     * @returns {Promise} resolves to a result.
      */
-    function fetchError(n, r) {
-        return r.text().then(text => {
-            throw "'" + n + "' request HTTP status code: " + 
-            r.status + 
-            ". Response: " + 
-            text;
+    function verifyWithCreatorKey(instance, unsigned, extra) {
+        var subtle = getSubtle();
+        var url = "//" + instance.domain + "/owid/api/v1/creator";
+        if (instance.date != null) {
+            url += "?date=" + instance.date;
+        }
+        return fetch(url, {
+            mode: "cors",
+            cache: "default",
+            headers: owid.fetchHeaders
+        }).then(function (r) {
+            if (r.ok) {
+                return r.json().then(undefined, function (e) {
+                    throw failure(
+                        SignatureStatus.VERIFICATION_ERROR,
+                        "the creator response is not valid JSON",
+                        e);
+                });
+            }
+            return r.text().then(function (text) {
+                throw failure(
+                    SignatureStatus.KEY_UNAVAILABLE,
+                    "'Creator' request HTTP status code: " + r.status,
+                    "'Creator' request HTTP status code: " + r.status +
+                    ". Response: " + text);
+            });
+        }, function (e) {
+            throw failure(
+                SignatureStatus.KEY_UNAVAILABLE,
+                "the creator key could not be fetched",
+                e);
+        }).then(function (c) {
+            if (!c || typeof c.publicKeySPKI !== "string") {
+                throw failure(
+                    SignatureStatus.VERIFICATION_ERROR,
+                    "the creator response carries no public key",
+                    "public key PEM contains no key data");
+            }
+            return importSpkiKey(subtle, c.publicKeySPKI).then(
+                undefined,
+                function (e) {
+                    throw failure(
+                        SignatureStatus.INVALID_KEY,
+                        "the public key could not be imported",
+                        e);
+                });
+        }).then(function (key) {
+            return checkSignature(
+                subtle, key, instance.signature, unsigned, extra);
+        });
+    }
+
+    /**
+     * Asks the creator's verify end point, which is the route taken when the
+     * runtime provides no Web Crypto.
+     * @param {Object} instance - the OWID being verified.
+     * @param {Uint8Array[]} extra - the other OWIDs' complete bytes.
+     * @returns {Promise} resolves to a result.
+     */
+    function verifyWithCreatorApi(instance, extra) {
+        var total = 0;
+        extra.forEach(function (p) { total += p.length; });
+        var joined = new Uint8Array(total);
+        var offset = 0;
+        extra.forEach(function (p) {
+            joined.set(p, offset);
+            offset += p.length;
+        });
+        var body = new URLSearchParams();
+        body.append("parent", encodeBase64(joined));
+        body.append("owid", instance.data);
+        var url = "//" + instance.domain +
+            "/owid/api/v" + instance.version + "/verify";
+        return fetch(url, {
+            method: "POST",
+            mode: "cors",
+            cache: "no-cache",
+            headers: owid.fetchHeaders,
+            body: body
+        }).then(function (r) {
+            if (r.ok) {
+                return r.json().then(undefined, function (e) {
+                    throw failure(
+                        SignatureStatus.VERIFICATION_ERROR,
+                        "the verify response is not valid JSON",
+                        e);
+                });
+            }
+            return r.text().then(function (text) {
+                throw failure(
+                    SignatureStatus.VERIFICATION_ERROR,
+                    "'Verify' request HTTP status code: " + r.status,
+                    "'Verify' request HTTP status code: " + r.status +
+                    ". Response: " + text);
+            });
+        }, function (e) {
+            throw failure(
+                SignatureStatus.VERIFICATION_ERROR,
+                "the verify end point could not be reached",
+                e);
+        }).then(function (r) {
+            // A response that carries no judgement is a creator answering
+            // something other than the question, which leaves the signature
+            // unjudged. Reading a missing field as false would report an end
+            // point fault as a forgery.
+            if (!r || typeof r.valid !== "boolean") {
+                throw failure(
+                    SignatureStatus.VERIFICATION_ERROR,
+                    "the verify response carries no judgement");
+            }
+            return Object.freeze({
+                ok: r.valid,
+                status: r.valid
+                    ? SignatureStatus.SIGNATURE_VALID
+                    : SignatureStatus.SIGNATURE_INVALID
+            });
         });
     }
 
     //#endregion
 
-    //#region public functions
+    //#region private other OWIDs
 
     /**
-     * Returns the OWID creation date as a JavaScript Date object.
-     * @function
-     * @memberof owid
-     * @returns {Date} the OWID instance creation date as a JavaScript Date
-     * object accurate to the minute.
+     * Turns whatever a caller passed as the other OWIDs covered by a signature
+     * into their complete bytes, in the order given. Only base 64 strings and
+     * OWIDs this library read are accepted, because an object that merely
+     * looks like an OWID has never been read from anything and carries no
+     * signature of its own.
+     * @param {(Object|Object[]|string|string[])} [others] - the other OWIDs.
+     * @returns {Uint8Array[]} their bytes.
      */
-    this.dateAsJavaScriptDate = function() {
-        var jsDate = new Date();
-        jsDate.setTime(new Date(ioDateBase).getTime() + (this.date * 60 * 1000));
-        return jsDate;
-    }
-
-    /**
-     * Parses a base 64 encoded byte array into a OWID tree. When no
-     * parameter is provided the data the instance was created from is used.
-     * @function
-     * @memberof owid
-     * @param {string} [t] - base 64 encoded byte array representing an OWID
-     * tree.
-     * @returns {Object} OWID tree.
-     */
-    this.parse = function (t) {
-        if (t === undefined) {
-            t = this.data;
+    function othersAsBytes(others) {
+        if (others === undefined || others === null) {
+            return [];
         }
-        if (t === "") {
-            throw "As this instance was created without any data, you must " +
-            "provide a base 64 encoded OWID as a parameter to this method.";
+        return collectOthers([others], 1);
+    }
+
+    /**
+     * Collects the other OWIDs from an array, tracking the depth so that a
+     * reference loop cannot run away.
+     * @param {Array} others - the other OWIDs.
+     * @param {number} depth - the current depth.
+     * @returns {Uint8Array[]} their bytes.
+     */
+    function collectOthers(others, depth) {
+        if (depth > maxVerifyDepth) {
+            throw failure(
+                SignatureStatus.VERIFICATION_ERROR,
+                "maximum depth reached when reading the other OWIDs, so " +
+                "check that the OWIDs provided have no reference loop");
         }
-        return parse(t);
-    }
-
-    /**
-     * Returns the payload as a string.
-     * @function
-     * @memberof owid
-     * @returns {string} This OWID instance's payload as a string.
-     */
-    this.payloadAsString = function () {
-        return this.owid.payloadAsString();
-    }
-
-    /**
-     * Returns the payload in hexadecimal. Single digit values are not
-     * padded with a leading zero.
-     * @function
-     * @memberof owid
-     * @returns {string} This OWID instance's payload as a hexadecimal.
-     */
-    this.payloadAsPrintable = function () {
-        return this.owid.payloadAsPrintable();
-    }
-
-    /**
-     * Returns the payload as a base 64 array.
-     * @function
-     * @memberof owid
-     * @returns {string} This instance's payload as a base 64 array.
-     */
-    this.payloadAsBase64 = function () {
-        return parseToString(this.owid.payload);
-    }
-
-    /**
-     * Verify this OWID offline against a caller-supplied SPKI public key PEM,
-     * optionally together with other OWIDs that were signed with it (pass the
-     * same others, in the same order, as when signed). Unlike verify() this
-     * does not contact any network end point and works in Node as well as the
-     * browser. Returns a Promise that resolves to true if the signature is
-     * valid.
-     * @function
-     * @memberof owid
-     * @param {string} publicPem - the creator public key in SPKI PEM form.
-     * @param {(Object[]|string[])} [others] - other OWIDs covered by the
-     * signature.
-     * @returns {Promise} Promise resolving to true if the signature verifies.
-     */
-    this.verifyWithPublicKey = function (publicPem, others) {
-        var self = this;
-        // Defer so a synchronous failure in getSubtle or importSpkiKey (e.g.
-        // no Web Crypto, or an empty PEM) surfaces as a rejected promise
-        // rather than a synchronous throw that escapes the caller's .catch.
-        return Promise.resolve().then(function () {
-            var subtle = getSubtle();
-            others = others || [];
-            return importSpkiKey(subtle, publicPem).then(function (key) {
-                var parts = [getByteArray(self.owid)];
-                others.forEach(function (o) {
-                    parts.push(typeof o === "string"
-                        ? parseToByteArray(o)
-                        : getByteArray(o));
-                });
-                var total = 0;
-                parts.forEach(function (p) { total += p.length; });
-                var message = new Uint8Array(total);
-                var offset = 0;
-                parts.forEach(function (p) { message.set(p, offset); offset += p.length; });
-                return subtle.verify(ECDSA, key, self.owid.signature, message);
-            });
+        var c = [];
+        others.forEach(function (o) {
+            if (o === undefined || o === null) {
+                return;
+            }
+            if (typeof o === "string") {
+                c = c.concat(bytesFromString(o));
+            } else if (Array.isArray(o)) {
+                c = c.concat(collectOthers(o, depth + 1));
+            } else if (instances.has(o)) {
+                c.push(bytesOf(o));
+            } else {
+                throw failure(
+                    SignatureStatus.VERIFICATION_ERROR,
+                    "an other OWID must be a base 64 string or an OWID from " +
+                    "owid.tryParse, and a '" + typeof o + "' was supplied");
+            }
         });
+        return c;
     }
 
     /**
-     * Stop an advert. Posts the organization domain and the return URL to
-     * the /stop end point and then redirects the browser to the URL
-     * contained in the response.
-     * @function
-     * @memberof owid
-     * @param {*} s - SWAN OWID, reserved and currently unused.
-     * @param {string} d - organization domain to stop.
-     * @param {string} r - return url to come back to once stopped.
+     * Splits a string that may carry several base 64 OWIDs on whatever
+     * separators it uses, and decodes each one.
+     * @param {string} o - the base 64 string or strings.
+     * @returns {Uint8Array[]} their bytes.
      */
-    this.stop = function (s, d, r) {
-        var data = new URLSearchParams();
-        data.append("host", d);
-        data.append("returnUrl", r);
-        fetch("/stop",
-            {
-                method: "POST",
-                mode: "cors", 
-                cache: "no-cache",
-                body: data
-            })
-            .then(r => {
-                if (r.ok) {
-                    return r.text();    
-                }
-                return fetchError("Stop", r);
-            })
-            .then(m => {
-                console.log(m);
-                window.location.href = m;
-            })
-            .catch(x => {
-                console.log(x);
+    function bytesFromString(o) {
+        if (o === "") {
+            throw failure(
+                SignatureStatus.VERIFICATION_ERROR,
+                "OWID(s) must have a value and cannot be an empty string.");
+        }
+        var separators = [];
+        for (var i = 0; i < o.length; i++) {
+            var c = o.charAt(i);
+            if (base64Characters.indexOf(c) === -1 &&
+                separators.indexOf(c) === -1) {
+                separators.push(c);
+            }
+        }
+        var parts = separators.length === 0
+            ? [o]
+            : o.split(new RegExp(
+                "[" + escapeForCharacterClass(separators) + "]", "g"));
+        var r = [];
+        parts.forEach(function (p) {
+            if (p === "") {
+                return;
+            }
+            var decoded = decodeBase64(p);
+            if (decoded.status !== undefined) {
+                throw failure(
+                    SignatureStatus.VERIFICATION_ERROR,
+                    "an other OWID is not valid base 64");
+            }
+            r.push(decoded.bytes);
+        });
+        return r;
+    }
+
+    /**
+     * Escapes the characters that mean something inside a regular expression
+     * character class. Until 30 August 2026 every separator was escaped with a
+     * backslash on a condition that could never be false, so the list of
+     * characters the escaping was meant to choose between had no effect.
+     * @param {string[]} characters - the separator characters.
+     * @returns {string} the body of a character class.
+     */
+    function escapeForCharacterClass(characters) {
+        return characters.map(function (c) {
+            return "^]\\-".indexOf(c) === -1 ? c : "\\" + c;
+        }).join("");
+    }
+
+    /**
+     * The complete bytes of an OWID this library read.
+     * @param {Object} instance - the OWID.
+     * @returns {Uint8Array} its bytes.
+     */
+    function bytesOf(instance) {
+        return instances.get(instance);
+    }
+
+    //#endregion
+
+    //#region the module
+
+    /**
+     * The OWID namespace. Calling it, with or without new, is refused, because
+     * an OWID is obtained by reading one. This function exists only to carry
+     * the module's operations and to say so to code written against the
+     * constructor it replaces.
+     */
+    function owid() {
+        throw "an OWID cannot be constructed. Use owid.tryParse to read one " +
+        "from base 64, or owid.tryParseBytes to read one from a byte array";
+    }
+
+    /**
+     * Why a read succeeded or failed. Frozen, and compared by value rather
+     * than by the text of any message.
+     */
+    owid.ParseStatus = ParseStatus;
+
+    /**
+     * The outcome of asking whether a signature is genuine. Frozen.
+     */
+    owid.SignatureStatus = SignatureStatus;
+
+    /**
+     * Reads a complete OWID from its base 64 form.
+     *
+     * The value may be anything at all, because this is external data and
+     * failing to be an OWID is an ordinary outcome rather than an error.
+     * Nothing is thrown, no key is fetched and no signature is checked. A
+     * successful read says the bytes are a structurally valid OWID, which is a
+     * different question from whether its signature is genuine.
+     *
+     * @param {string} value - the OWID as base 64.
+     * @returns {Object} a frozen result with ok, owid and status. On success
+     * ok is true, owid is the OWID and status is ParseStatus.PARSED. On
+     * failure ok is false, owid is null and status names the reason, with the
+     * numbers that disagreed alongside it where there are any.
+     */
+    owid.tryParse = function (value) {
+        return parseBase64(value);
+    };
+
+    /**
+     * Reads a complete OWID from a buffer holding exactly one. Data after the
+     * envelope is refused, because on this surface there is nothing else it
+     * could belong to.
+     * @param {Uint8Array} buffer - the OWID bytes.
+     * @returns {Object} a frozen result with ok, owid and status.
+     */
+    owid.tryParseBytes = function (buffer) {
+        return parseBytes(buffer);
+    };
+
+    /**
+     * True when the value is an OWID this library read. An object that merely
+     * carries the same field names is not one, because its fields have never
+     * been read from anything.
+     * @param {*} value - the value to test.
+     * @returns {boolean} whether it is an OWID.
+     */
+    owid.isOwid = function (value) {
+        return typeof value === "object" && value !== null &&
+            instances.has(value);
+    };
+
+    /**
+     * Verifies each of the OWIDs supplied in its own right, which is what an
+     * empty instance used to be created for.
+     * @param {(Object|Object[]|string|string[])} owids - the OWIDs, as base 64
+     * strings or as OWIDs from tryParse.
+     * @returns {Promise} resolves to true when every one of them is genuine.
+     */
+    owid.verify = function (owids) {
+        return Promise.resolve().then(function () {
+            var list = asOwidList(owids, 1);
+            if (list.length === 0) {
+                throw "OWID(s) must have a value and cannot be an empty " +
+                "string.";
+            }
+            return Promise.all(list.map(function (o) {
+                return o.verify();
+            })).then(function (r) {
+                return r.every(function (v) { return v; });
             });
-    }
+        }).catch(function (e) {
+            // The reading helpers share their refusals with verification, so
+            // a refusal arrives as one of the carriers used there. A caller
+            // of this method sees a message, as it did before.
+            throw (e && e.isOwidVerificationFailure === true) ? e.message : e;
+        });
+    };
 
     /**
-     * Verify the OWID of this instance and optionally any other OWIDs provided.
-     * @function
-     * @memberof owid
-     * @param {(Object|Object[]|string|string[]|Array)} owids - Other OWIDs to 
-     * verify.
-     * @returns {Promise} Promise object resolves to true if all OWIDs are 
-     * verified.
+     * Turns whatever a caller passed into OWIDs, reading any base 64 strings.
+     * @param {(Object|Object[]|string|string[])} owids - the OWIDs.
+     * @param {number} depth - the current depth.
+     * @returns {Object[]} the OWIDs.
      */
-    this.verify = function (owids) {
-        function verifyStringOWID(p, o) {
-            if (window.crypto.subtle) {
-                return verifyOWIDWithPublicKey(p, o);
-            } else {
-                return verifyOWIDWithAPI(p, o);
-            }
+    function asOwidList(owids, depth) {
+        if (depth > maxVerifyDepth) {
+            throw "Maximum depth reached when reading OWIDs, so check that " +
+            "the OWIDs provided have no reference loop.";
         }
-
-        function verifyObjectOWID(p, o) {
-            if (window.crypto.subtle) {
-                return verifyOWIDObjectWithPublicKey(p, o);
-            } else {
-                return verifyOWIDObjectWithAPI(p, parseToString(getByteArray(o)), o);
-            }
+        if (owids === undefined || owids === null) {
+            return [];
         }
-
-        /**
-         * Get a useable list of OWIDs.
-         * @param {(Object|Object[]|string|string[]|Array)} owids - OWIDs to 
-         * verify.
-         * @returns 
-         */
-        function getOWIDs(owids) {
-            return getOWIDsFromArray([owids]);
-        }
-
-        /**
-         * Get a useable list of OWIDs from an Array.
-         * This function can be called from @see getOWIDsFromObject to retrieve 
-         * OWIDs from an Array, keep track of the depth to prevent runaway.
-         * @param {Array} owids - an array of owids
-         * @param {number} depth - the current depth when traversing an array of
-         * OWIDs
-         * @returns 
-         */
-        function getOWIDsFromArray(owids, depth) {
-
-            // Set or check depth.
-            if (typeof depth == 'number') {
-                if(depth <= maxVerifyDepth) {
-                    depth++; 
-                } else {
-                    throw "Maximum depth reached when parsing OWIDs, make sure" +
-                    " provided OWIDs don't have a reference loop.";
-                }
-            } else {
-                depth = 1;
-            }
-
-            // Iterate over the items in the owids array.
+        if (Array.isArray(owids)) {
             var c = [];
-            owids.forEach(o => {
-                if (o !== undefined) {
-                    switch (typeof o) {
-                        case "string":
-                            c = c.concat(getOWIDsFromString(o));
-                            break;
-                        case "object":
-                            c = c.concat(getOWIDsFromObject(o, depth));
-                            break;
-                        default:
-                            console.log(`Cannot parse type ${typeof o}`);
-                            break;
-                    }
-                }
+            owids.forEach(function (o) {
+                c = c.concat(asOwidList(o, depth + 1));
             });
             return c;
         }
-
-        /**
-         * For a given string, get a list of useable base 64 encoded byte arrays 
-         * that represent OWIDs
-         * @param {string} o - base 64 encoded byte array(s)
-         * @returns {string[]}
-         */
-        function getOWIDsFromString(o) {
-            if (o === undefined || o === ""){
-                throw "OWID(s) must have a value and cannot be an empty string." 
+        if (instances.has(owids)) {
+            return [owids];
+        }
+        if (typeof owids === "string") {
+            if (owids === "") {
+                throw "OWID(s) must have a value and cannot be an empty " +
+                "string.";
             }
-
-            var s = [];
-
-            for (var i = 0; i < o.length; i++) {
-                var c = o.charAt(i);
-                if (base64Characters.indexOf(c) === -1) {
-                    if (regExpSpecials.indexOf(c) !== -2) {
-                        c = "\\" + c;
-                    }
-                    s.push(c);
+            var r = [];
+            bytesFromString(owids).forEach(function (b) {
+                var read = parseBytes(b);
+                if (!read.ok) {
+                    throw "an OWID could not be read: " + read.status;
                 }
-            }
-
-            var r = new RegExp("[" + s.join("") + "]", "g");
-
-            return o.split(r);
-        }
-
-        /**
-         * For a given object, get a list of useable OWIDs.
-         * @param {Object} o -
-         * @returns {Array} 
-         */
-        function getOWIDsFromObject(o, depth) {
-            if (Array.isArray(o)) {
-                return getOWIDsFromArray(o, depth)
-            } else if (o.hasOwnProperty('verify') && o.hasOwnProperty('parse')) {
-                return [o.data];
-            } else if (o.hasOwnProperty('domain') && o.hasOwnProperty('version')) {
-                return parseToString(getByteArray(o));
-            }
-            throw `unrecognized object ${o}`;
-        }
-
-        /**
-         * Get combined base 64 string of other owids to verify with
-         * @param {string} others - other OWIDs
-         */
-        function dataForCypto(others) {
-            var a = others.map(o => {
-                if (typeof o === "string") {
-                    return parseToByteArray(o);
-                } else if (typeof o === "object") {
-                    return getByteArray(o);
-                } else {
-                    throw `unsupported type: ${typeof o}, supported types are 'string' and 'object'`;
-                }
+                r.push(read.owid);
             });
-
-            var length = 0;
-            a.forEach(b => length += b.length);
-
-            var v = new Uint8Array(length);
-            var offset = 0;
-            a.forEach(b => {
-                v.set(b, offset);
-                offset += b.length;
-            });
-
-            var binary = "";
-            for (var i = 0; i < length; i++) {
-                binary += String.fromCharCode(v[i]);
-            }
-            return btoa(binary);
+            return r;
         }
-
-        var owidList = getOWIDs(owids);
-        if (owidList.length > 0) {
-            if (this.data !== undefined && this.data !== "") {
-                var b = dataForCypto(owidList);
-                return verifyStringOWID(b, this.data);
-            } else {
-                return Promise.all(owidList.map(o => {
-                    if (typeof o === "string") {
-                        return verifyStringOWID("", o);
-                    } else if (typeof o === "object") {
-                            return verifyObjectOWID("", o);
-                    } else {
-                        throw `unsupported type: ${typeof o}, supported types are 'string' and 'object'`;
-                    }
-                }))
-                .then(r => r.length > 0 && r.every(v => v));
-            }
-        } else {
-            if (this.data === undefined || this.data === "") {
-                throw "OWID must have a value and cannot be an empty string."
-            }
-            return verifyStringOWID("", this.data);
-        }
+        throw "an OWID must be a base 64 string or an OWID from " +
+        "owid.tryParse, and a '" + typeof owids + "' was supplied";
     }
 
-    //#endregion
-}
+    /**
+     * Stops an advert. Posts the organization domain and the return URL to the
+     * /stop end point and then redirects the browser to the URL contained in
+     * the response.
+     * @param {string} d - organization domain to stop.
+     * @param {string} r - return url to come back to once stopped.
+     * @returns {Promise} resolves once the redirect has been started.
+     */
+    owid.stop = function (d, r) {
+        var data = new URLSearchParams();
+        data.append("host", d);
+        data.append("returnUrl", r);
+        return fetch("/stop", {
+            method: "POST",
+            mode: "cors",
+            cache: "no-cache",
+            body: data
+        }).then(function (response) {
+            if (response.ok) {
+                return response.text();
+            }
+            return response.text().then(function (text) {
+                throw "'Stop' request HTTP status code: " + response.status +
+                ". Response: " + text;
+            });
+        }).then(function (m) {
+            console.log(m);
+            window.location.href = m;
+        }).catch(function (x) {
+            console.log(x);
+        });
+    };
 
-/**
- * Optional HTTP headers sent with the creator request that fetches the
- * public key. Servers MAY require a credential, for example
- * { "X-Api-Key": "<key>" }. The headers go to every creator domain a
- * verification touches, so only set a credential that all the creators
- * in the tree are meant to see.
- */
-owid.fetchHeaders = undefined;
+    /**
+     * Optional HTTP headers sent with the creator request that fetches the
+     * public key. Servers MAY require a credential, for example
+     * { "X-Api-Key": "<key>" }. The headers go to every creator domain a
+     * verification touches, so only set a credential that all the creators in
+     * the tree are meant to see.
+     */
+    owid.fetchHeaders = undefined;
+
+    return owid;
+
+    //#endregion
+})();
 
 try {
     module.exports = owid;

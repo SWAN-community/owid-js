@@ -45,6 +45,20 @@ const otherKeyPair = nodeCrypto.generateKeyPairSync('ec', {
 // 2021-04-06 12:59 UTC expressed as minutes since 2020-01-01 00:00 UTC.
 const testDateInMinutes = 664619;
 
+/**
+ * Reads an OWID that the test expects to be valid, asserting the three facts
+ * a read always reports before handing back the OWID itself.
+ * @param {string} data - the OWID as base 64.
+ * @returns {Object} the OWID.
+ */
+function read(data) {
+    var r = owid.tryParse(data);
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe(owid.ParseStatus.PARSED);
+    expect(r.owid).not.toBeNull();
+    return r.owid;
+}
+
 const creatorDomain = "creator.swan-demo.uk";
 const wrongKeyDomain = "wrong-key.swan-demo.uk";
 const emptyKeyDomain = "empty-key.swan-demo.uk";
@@ -148,7 +162,7 @@ beforeEach(() => {
 test('crypto verify valid OWID passes', () => {
     var unsigned = buildUnsignedOWID(
         creatorDomain, testDateInMinutes, Buffer.from("example"));
-    var o = new owid(signOWID(unsigned, creatorKeyPair.privateKey));
+    var o = read(signOWID(unsigned, creatorKeyPair.privateKey));
 
     return o.verify().then(valid => {
         expect(valid).toBe(true);
@@ -163,7 +177,7 @@ test('crypto verify valid OWID passes', () => {
 test('crypto verify sends configured fetch headers', () => {
     var unsigned = buildUnsignedOWID(
         creatorDomain, testDateInMinutes, Buffer.from("example"));
-    var o = new owid(signOWID(unsigned, creatorKeyPair.privateKey));
+    var o = read(signOWID(unsigned, creatorKeyPair.privateKey));
 
     owid.fetchHeaders = { "X-Api-Key": "test-key" };
     return o.verify().then(valid => {
@@ -181,7 +195,7 @@ test('crypto verify tampered signature fails', () => {
         creatorDomain, testDateInMinutes, Buffer.from("example"));
     var valid = signOWID(unsigned, creatorKeyPair.privateKey);
     // Corrupt the last byte, which is always within the 64 byte signature.
-    var o = new owid(corruptByte(valid, -1));
+    var o = read(corruptByte(valid, -1));
 
     return o.verify().then(valid => {
         expect(valid).toBe(false);
@@ -194,7 +208,7 @@ test('crypto verify tampered payload fails', () => {
     var valid = signOWID(unsigned, creatorKeyPair.privateKey);
     // Corrupt the last payload byte, which is the last byte before the 64
     // byte signature.
-    var o = new owid(corruptByte(valid, -65));
+    var o = read(corruptByte(valid, -65));
 
     return o.verify().then(valid => {
         expect(valid).toBe(false);
@@ -206,7 +220,7 @@ test('crypto verify wrong public key fails', () => {
         wrongKeyDomain, testDateInMinutes, Buffer.from("example"));
     // The OWID is signed correctly but the mocked creator end point for
     // this domain returns a different public key.
-    var o = new owid(signOWID(unsigned, creatorKeyPair.privateKey));
+    var o = read(signOWID(unsigned, creatorKeyPair.privateKey));
 
     return o.verify().then(valid => {
         expect(valid).toBe(false);
@@ -216,14 +230,14 @@ test('crypto verify wrong public key fails', () => {
 test('crypto verify party OWID signed with creator OWID passes', () => {
     var creatorUnsigned = buildUnsignedOWID(
         creatorDomain, testDateInMinutes, Buffer.from("example"));
-    var creator = new owid(
+    var creator = read(
         signOWID(creatorUnsigned, creatorKeyPair.privateKey));
 
     // The party signature covers the party bytes followed by the complete
     // creator OWID, matching how SWAN parties sign a transaction.
     var partyUnsigned = buildUnsignedOWID(
         creatorDomain, testDateInMinutes, Buffer.from([1, 3]));
-    var party = new owid(signOWID(
+    var party = read(signOWID(
         partyUnsigned,
         creatorKeyPair.privateKey,
         Buffer.from(creator.data, 'base64')));
@@ -239,7 +253,7 @@ test('crypto verify empty public key PEM rejects', () => {
     // The OWID is signed correctly but the mocked creator end point for this
     // domain returns a header only PEM with no key data, so the import must
     // reject with the clear message rather than an opaque DOMException.
-    var o = new owid(signOWID(unsigned, creatorKeyPair.privateKey));
+    var o = read(signOWID(unsigned, creatorKeyPair.privateKey));
 
     return expect(o.verify()).rejects.toBe(
         "public key PEM contains no key data");
@@ -248,14 +262,14 @@ test('crypto verify empty public key PEM rejects', () => {
 test('crypto verify party OWID with wrong creator OWID fails', () => {
     var creatorUnsigned = buildUnsignedOWID(
         creatorDomain, testDateInMinutes, Buffer.from("example"));
-    var creator = new owid(
+    var creator = read(
         signOWID(creatorUnsigned, creatorKeyPair.privateKey));
 
     // The party signature covers different additional data to the creator
     // OWID passed to verify, so verification must fail.
     var partyUnsigned = buildUnsignedOWID(
         creatorDomain, testDateInMinutes, Buffer.from([1, 3]));
-    var party = new owid(signOWID(
+    var party = read(signOWID(
         partyUnsigned,
         creatorKeyPair.privateKey,
         Buffer.from("different data")));
@@ -281,7 +295,7 @@ const otherPublicPem = otherKeyPair.publicKey.export({
 test('verifyWithPublicKey valid OWID passes with no fetch', () => {
     var unsigned = buildUnsignedOWID(
         creatorDomain, testDateInMinutes, Buffer.from("example"));
-    var o = new owid(signOWID(unsigned, creatorKeyPair.privateKey));
+    var o = read(signOWID(unsigned, creatorKeyPair.privateKey));
 
     return o.verifyWithPublicKey(creatorPublicPem).then(valid => {
         expect(valid).toBe(true);
@@ -293,7 +307,7 @@ test('verifyWithPublicKey valid OWID passes with no fetch', () => {
 test('verifyWithPublicKey wrong public key fails', () => {
     var unsigned = buildUnsignedOWID(
         creatorDomain, testDateInMinutes, Buffer.from("example"));
-    var o = new owid(signOWID(unsigned, creatorKeyPair.privateKey));
+    var o = read(signOWID(unsigned, creatorKeyPair.privateKey));
 
     return o.verifyWithPublicKey(otherPublicPem).then(valid => {
         expect(valid).toBe(false);
@@ -304,7 +318,7 @@ test('verifyWithPublicKey tampered signature fails', () => {
     var unsigned = buildUnsignedOWID(
         creatorDomain, testDateInMinutes, Buffer.from("example"));
     var valid = signOWID(unsigned, creatorKeyPair.privateKey);
-    var o = new owid(corruptByte(valid, -1));
+    var o = read(corruptByte(valid, -1));
 
     return o.verifyWithPublicKey(creatorPublicPem).then(valid => {
         expect(valid).toBe(false);
@@ -314,14 +328,14 @@ test('verifyWithPublicKey tampered signature fails', () => {
 test('verifyWithPublicKey covers others in the signature', () => {
     var creatorUnsigned = buildUnsignedOWID(
         creatorDomain, testDateInMinutes, Buffer.from("example"));
-    var creator = new owid(
+    var creator = read(
         signOWID(creatorUnsigned, creatorKeyPair.privateKey));
 
     // The party signature covers the party bytes followed by the complete
     // creator OWID, so the creator OWID is supplied as an "other".
     var partyUnsigned = buildUnsignedOWID(
         creatorDomain, testDateInMinutes, Buffer.from([1, 3]));
-    var party = new owid(signOWID(
+    var party = read(signOWID(
         partyUnsigned,
         creatorKeyPair.privateKey,
         Buffer.from(creator.data, 'base64')));
@@ -335,7 +349,7 @@ test('verifyWithPublicKey covers others in the signature', () => {
 test('verifyWithPublicKey empty PEM rejects rather than throwing', () => {
     var unsigned = buildUnsignedOWID(
         creatorDomain, testDateInMinutes, Buffer.from("example"));
-    var o = new owid(signOWID(unsigned, creatorKeyPair.privateKey));
+    var o = read(signOWID(unsigned, creatorKeyPair.privateKey));
 
     // A header only PEM has no key data. The failure must arrive as a
     // rejected promise, not a synchronous throw that escapes .catch.
