@@ -15,11 +15,11 @@
  * ***************************************************************************/
 
 // The payload length field of an OWID is whatever the sender declared, so
-// parsing must check it against the bytes present before sizing anything by
+// reading must check it against the bytes present before sizing anything by
 // it. These tests prove that a declared length that does not leave exactly
 // the signature after the payload is refused, that refusing it costs nothing
 // sized by the declared number, and that a correctly sized envelope still
-// parses. The 64 byte signature is the fixed tail every valid OWID ends with.
+// reads. The 64 byte signature is the fixed tail every valid OWID ends with.
 // The library never signs anything itself, so the one signed envelope here
 // is produced with node's crypto module in the same way the crypto tests do.
 
@@ -29,6 +29,36 @@ const nodeCrypto = require('crypto');
 const signatureLength = 64;
 const domain = "51d.es";
 const dateInMinutes = 1000;
+
+/**
+ * Reads an OWID that the test expects to be valid, asserting the three facts
+ * a read always reports before handing back the OWID itself.
+ * @param {string} data - the OWID as base 64.
+ * @returns {Object} the OWID.
+ */
+function read(data) {
+    var r = owid.parse(data);
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe(owid.ParseStatus.PARSED);
+    expect(r.owid).not.toBeNull();
+    return r.owid;
+}
+
+/**
+ * Asserts that a read failed for the reason given and that it reported all
+ * of it, being nothing thrown, the failure reported, no value handed back
+ * and the specific status.
+ * @param {string} data - the OWID as base 64.
+ * @param {string} status - the expected ParseStatus.
+ * @returns {Object} the result, so a test can check the numbers it carries.
+ */
+function refused(data, status) {
+    var r = owid.parse(data);
+    expect(r.ok).toBe(false);
+    expect(r.owid).toBeNull();
+    expect(r.status).toBe(status);
+    return r;
+}
 
 /**
  * A version 3 envelope, being the version byte, the domain with its
@@ -60,34 +90,33 @@ const payload = Buffer.alloc(37, 0x5A);
 const signature = Buffer.alloc(signatureLength, 0x99);
 
 // The declared length matches the bytes present, the signature is the last
-// 64 bytes, and the envelope parses to the same payload.
+// 64 bytes, and the envelope reads back to the same payload.
 test('declared length matches parses', () => {
-    var o = new owid(envelope(payload.length, payload, signature));
+    var o = read(envelope(payload.length, payload, signature));
 
     expect(o.domain).toBe(domain);
     expect(o.date).toBe(dateInMinutes);
-    expect(Buffer.from(o.owid.payload).equals(payload)).toBe(true);
+    expect(Buffer.from(o.payload).equals(payload)).toBe(true);
     expect(Buffer.from(o.signature).equals(signature)).toBe(true);
-    // Parsed fields keep their historical independent backing buffers, so
-    // exposing payload.buffer cannot expose the rest of the OWID envelope.
-    expect(o.owid.payload.buffer).not.toBe(o.signature.buffer);
+    // The accessors hand out copies, so exposing the payload cannot expose
+    // the rest of the OWID envelope.
+    expect(o.payload.buffer).not.toBe(o.signature.buffer);
 });
 
 // A matching payload materially larger than an ordinary identifier remains
 // valid. Applications may impose a smaller policy before decoding it, but
-// that policy is not part of format parsing.
+// that policy is not part of format reading.
 test('matching one mebibyte payload parses', () => {
     var largePayload = Buffer.alloc(1024 * 1024, 0x5A);
 
-    var o = new owid(envelope(
-        largePayload.length, largePayload, signature));
+    var o = read(envelope(largePayload.length, largePayload, signature));
 
-    expect(Buffer.from(o.owid.payload).equals(largePayload)).toBe(true);
+    expect(Buffer.from(o.payload).equals(largePayload)).toBe(true);
 });
 
 // An envelope with a real 64 byte ECDSA signature over its contents, built
-// the way the server side libraries build one, parses. The library is
-// verify only so this is the closest thing to its own serialised output.
+// the way the server side libraries build one, reads. The library is verify
+// only so this is the closest thing to its own serialised output.
 test('signed envelope parses', () => {
     var keyPair = nodeCrypto.generateKeyPairSync('ec', {
         namedCurve: 'prime256v1'
@@ -100,23 +129,27 @@ test('signed envelope parses', () => {
     });
     expect(realSignature.length).toBe(signatureLength);
 
-    var o = new owid(
-        Buffer.concat([unsigned, realSignature]).toString('base64'));
+    var o = read(Buffer.concat([unsigned, realSignature]).toString('base64'));
 
     expect(o.domain).toBe(domain);
-    expect(Buffer.from(o.owid.payload).equals(payload)).toBe(true);
+    expect(Buffer.from(o.payload).equals(payload)).toBe(true);
     expect(Buffer.from(o.signature).equals(realSignature)).toBe(true);
 });
 
 // One more or one fewer than the bytes present is refused, because either
-// leaves something other than exactly the signature at the end.
+// leaves something other than exactly the signature at the end. The result
+// carries both numbers so that a caller can say what disagreed without the
+// library putting the sender's own data in a message.
 test.each([
     [payload.length - 1],
     [payload.length + 1],
 ])('declared length off by one to %p is refused', (declared) => {
-    var data = envelope(declared, payload, signature);
+    var r = refused(
+        envelope(declared, payload, signature),
+        owid.ParseStatus.BYTE_COUNT_MISMATCH);
 
-    expect(() => new owid(data)).toThrow("OWID payload length '" + declared);
+    expect(r.declared).toBe(declared);
+    expect(r.present).toBe(payload.length);
 });
 
 // A byte after the signature is refused, because the signature must be the
@@ -127,16 +160,36 @@ test('trailing byte after signature is refused', () => {
         Buffer.from([0])
     ]).toString('base64');
 
-    expect(() => new owid(data)).toThrow("OWID payload length");
+    var r = refused(data, owid.ParseStatus.BYTE_COUNT_MISMATCH);
+
+    expect(r.declared).toBe(payload.length);
+    expect(r.present).toBe(payload.length + 1);
 });
 
 // A short signature is refused. The declared payload length is right for the
-// payload, but the bytes after it are fewer than a signature.
+// payload, but the bytes after it are fewer than a signature, so what is
+// certain is that the declaration cannot leave exactly the signature the
+// version requires.
 test('signature of 63 bytes is refused', () => {
     var data = envelope(
         payload.length, payload, Buffer.alloc(signatureLength - 1, 0x99));
 
-    expect(() => new owid(data)).toThrow("OWID payload length");
+    var r = refused(data, owid.ParseStatus.BYTE_COUNT_MISMATCH);
+
+    expect(r.declared).toBe(payload.length);
+    expect(r.present).toBe(payload.length - 1);
+});
+
+// A buffer that stops before the signature can even start gives a negative
+// count of the payload bytes present rather than a count that has wrapped,
+// so it can never equal a declaration.
+test('a buffer shorter than a signature reports a negative count', () => {
+    var data = envelope(0, Buffer.alloc(0), Buffer.alloc(10, 0x99));
+
+    var r = refused(data, owid.ParseStatus.BYTE_COUNT_MISMATCH);
+
+    expect(r.declared).toBe(0);
+    expect(r.present).toBe(10 - signatureLength);
 });
 
 // A large declaration whose payload bytes are absent is refused without any
@@ -144,7 +197,7 @@ test('signature of 63 bytes is refused', () => {
 // so the proof is time. Each envelope is a few dozen bytes while declaring
 // 64 MiB, 2 GiB, or the largest unsigned value. The numeric values remain
 // valid when the matching payload is present. One thousand refusals of each
-// complete in well under a second, which would fail if the parse allocated
+// complete in well under a second, which would fail if the read allocated
 // or copied the declared size on each attempt. The third value also proves
 // the count is read as unsigned, as a signed read would turn it into minus
 // one.
@@ -158,8 +211,10 @@ test.each([
 
     var start = Date.now();
     for (var i = 0; i < attempts; i++) {
-        expect(() => new owid(data))
-            .toThrow("OWID payload length '" + declared + "'");
+        var r = owid.parse(data);
+        expect(r.ok).toBe(false);
+        expect(r.status).toBe(owid.ParseStatus.BYTE_COUNT_MISMATCH);
+        expect(r.declared).toBe(declared);
     }
     var elapsed = Date.now() - start;
 
@@ -168,26 +223,26 @@ test.each([
 
 // An empty payload is a valid envelope. The declared length of zero leaves
 // exactly the 64 byte signature, so the check accepts it and the payload
-// parses as empty.
+// reads as empty. Having nothing to say is allowed.
 test('empty payload with a signature parses', () => {
-    var o = new owid(envelope(0, Buffer.alloc(0), signature));
+    var o = read(envelope(0, Buffer.alloc(0), signature));
 
     expect(o.domain).toBe(domain);
-    expect(o.owid.payload.length).toBe(0);
+    expect(o.payload.length).toBe(0);
     expect(Buffer.from(o.signature).equals(signature)).toBe(true);
 });
 
-// The other reads in the parser are bounded by the bytes present as well.
+// The other reads in the reader are bounded by the bytes present as well.
 // A domain with no zero terminator, an envelope that ends inside the date
 // and one that ends inside the payload length field are each refused
-// rather than the parser reading past the end of the buffer.
+// rather than the reader running past the end of the buffer.
 test('domain without a terminator is refused', () => {
     var data = Buffer.concat([
         Buffer.from([3]),
         Buffer.from(domain, 'ascii')
     ]).toString('base64');
 
-    expect(() => new owid(data)).toThrow("string terminator");
+    refused(data, owid.ParseStatus.UNEXPECTED_END);
 });
 
 test('envelope ending inside the date is refused', () => {
@@ -198,7 +253,7 @@ test('envelope ending inside the date is refused', () => {
         Buffer.from([1, 2])
     ]).toString('base64');
 
-    expect(() => new owid(data)).toThrow("32 bit integer");
+    refused(data, owid.ParseStatus.UNEXPECTED_END);
 });
 
 test('envelope ending inside the payload length is refused', () => {
@@ -206,15 +261,15 @@ test('envelope ending inside the payload length is refused', () => {
         envelope(payload.length, payload, signature), 'base64');
     var cut = whole.subarray(0, 1 + domain.length + 1 + 4 + 2);
 
-    expect(() => new owid(cut.toString('base64'))).toThrow("32 bit integer");
+    refused(cut.toString('base64'), owid.ParseStatus.UNEXPECTED_END);
 });
 
 // The creator domain is stored as ASCII followed by a zero terminator, and
-// the parser finds its end by walking forward to that terminator. RFC 1035
+// the reader finds its end by walking forward to that terminator. RFC 1035
 // section 2.3.4 restricts a domain name to 255 octets in the DNS wire
 // format, which is 253 characters in the presentation form an OWID stores,
 // so the walk is bounded there. These tests prove that a domain of the
-// published maximum still parses, that a longer one is refused, and that a
+// published maximum still reads, that a longer one is refused, and that a
 // buffer whose domain field never terminates is refused for a cost fixed by
 // the maximum rather than by the length of whatever was sent.
 
@@ -262,17 +317,17 @@ function domainEnvelope(domainText, terminated) {
     ]).toString('base64');
 }
 
-// A domain of exactly the published maximum is a valid domain, so it parses
+// A domain of exactly the published maximum is a valid domain, so it reads
 // and comes back as the same text.
 test('domain of the maximum length parses', () => {
     var longDomain = domainOfLength(maximumDomainLength);
     expect(longDomain.length).toBe(maximumDomainLength);
 
-    var o = new owid(domainEnvelope(longDomain, true));
+    var o = read(domainEnvelope(longDomain, true));
 
     expect(o.domain).toBe(longDomain);
     expect(o.date).toBe(dateInMinutes);
-    expect(Buffer.from(o.owid.payload).equals(payload)).toBe(true);
+    expect(Buffer.from(o.payload).equals(payload)).toBe(true);
 });
 
 // One character more than the published maximum is refused, even though the
@@ -281,19 +336,19 @@ test('domain one over the maximum length is refused', () => {
     var tooLong = domainOfLength(maximumDomainLength + 1);
     expect(tooLong.length).toBe(maximumDomainLength + 1);
 
-    var data = domainEnvelope(tooLong, true);
-
-    expect(() => new owid(data)).toThrow("OWID domain is not terminated");
+    refused(
+        domainEnvelope(tooLong, true),
+        owid.ParseStatus.INVALID_DOMAIN_ENCODING);
 });
 
 // A buffer whose domain field has no terminator anywhere is refused without
-// the parser walking the whole buffer. JavaScript cannot measure allocation,
+// the reader walking the whole buffer. JavaScript cannot measure allocation,
 // and the wall clock here is dominated by the base 64 decode rather than by
 // the walk, so the bound is measured by counting the walk itself. Building
 // the domain is the only thing that calls String.fromCharCode while an OWID
-// is being constructed, so the number of calls is the number of domain bytes
+// is being read, so the number of calls is the number of domain bytes
 // touched. The buffer is one mebibyte of domain characters with no zero byte
-// in it, and the parser must touch no more than one byte past the maximum
+// in it, and the reader must touch no more than one byte past the maximum
 // before it refuses.
 test('domain that never terminates is refused for a bounded cost', () => {
     var data = Buffer.concat([
@@ -308,8 +363,12 @@ test('domain that never terminates is refused for a bounded cost', () => {
     };
 
     try {
-        expect(() => new owid(data))
-            .toThrow("OWID domain is not terminated");
+        // The base 64 decode itself builds no string through fromCharCode,
+        // so every call counted below comes from the domain walk.
+        var r = owid.parse(data);
+        expect(r.ok).toBe(false);
+        expect(r.owid).toBeNull();
+        expect(r.status).toBe(owid.ParseStatus.INVALID_DOMAIN_ENCODING);
     } finally {
         String.fromCharCode = real;
     }
@@ -352,7 +411,7 @@ function signedEnvelope(domainText) {
     };
 }
 
-// A real signed envelope carrying a domain of the published maximum parses
+// A real signed envelope carrying a domain of the published maximum reads
 // and verifies as the same bytes, so the bound is not retrospective on
 // anything a server side library would produce.
 test('signed envelope with a maximum length domain parses', () => {
@@ -360,27 +419,18 @@ test('signed envelope with a maximum length domain parses', () => {
     var e = signedEnvelope(longDomain);
     expect(e.signature.length).toBe(signatureLength);
 
-    var o = new owid(e.data);
+    var o = read(e.data);
 
     expect(o.domain).toBe(longDomain);
-    expect(Buffer.from(o.owid.payload).equals(payload)).toBe(true);
+    expect(Buffer.from(o.payload).equals(payload)).toBe(true);
     expect(Buffer.from(o.signature).equals(e.signature)).toBe(true);
 });
 
-// The same published maximum binds the write as well as the read. A domain
-// reaches this library either inside an OWID that is parsed, which the tests
-// above cover, or inside an OWID tree object handed to verify or to
-// verifyWithPublicKey, which is serialized so the signature can be checked
-// over the bytes the creator signed. Where Web Crypto is not available that
-// serialized form is also the data posted to another implementation's verify
-// end point, so a domain longer than the maximum would put on the wire bytes
-// this same library refuses to read. These tests prove that a domain of the
-// maximum still serializes and verifies, and that one character more is
-// refused before any signature is checked.
-
-// The library serializes for verification, so a Web Crypto implementation
-// has to be present for the offline check below. Node provides one and it is
-// exposed here the same way a browser would, as the crypto tests do.
+// The library serializes nothing for verification any more: the bytes a
+// signature is checked over are the bytes that arrived, less the signature
+// on the end. A Web Crypto implementation has to be present for the offline
+// check below. Node provides one and it is exposed here the same way a
+// browser would, as the crypto tests do.
 Object.defineProperty(global.self, 'crypto', {
     value: {
         subtle: nodeCrypto.webcrypto.subtle
@@ -388,75 +438,46 @@ Object.defineProperty(global.self, 'crypto', {
     configurable: true
 });
 
-/**
- * An OWID tree object of the shape a caller can hand to verify, carrying the
- * domain given. Nothing here is signed, as the domain is refused, or not,
- * before the signature is reached.
- * @param {string} domainText - the creator domain of the tree.
- * @returns {Object} the OWID tree.
- */
-function domainTree(domainText) {
-    return {
-        version: 3,
-        domain: domainText,
-        date: dateInMinutes,
-        payload: payload
-    };
-}
-
-// A signed envelope with a domain of the maximum is parsed, serialized again
-// for verification and verifies, so the write bound leaves a domain the
-// library accepts today untouched and the library still round trips its own
-// serialized form back to the bytes that were signed.
-test('domain of the maximum length serialises and verifies', async () => {
+// A signed envelope with a domain of the maximum reads and verifies, so the
+// domain bound leaves a domain the library accepts today untouched.
+test('domain of the maximum length verifies', async () => {
     var longDomain = domainOfLength(maximumDomainLength);
     var e = signedEnvelope(longDomain);
 
-    var o = new owid(e.data);
+    var o = read(e.data);
 
     expect(o.domain).toBe(longDomain);
     await expect(o.verifyWithPublicKey(e.publicPem)).resolves.toBe(true);
 });
 
-// A tree carrying a domain of the maximum is serialized rather than refused.
-// The serializer writes the unsigned bytes only, with no signature on the
-// end, so verify goes on to complain that the bytes it was given stop where
-// the signature should start. That complaint, rather than one about the
-// domain, is what proves the domain of the maximum was written.
-test('tree with a maximum length domain is serialised', () => {
-    var tree = domainTree(domainOfLength(maximumDomainLength));
-
-    expect(() => new owid().verify(tree)).toThrow("OWID payload length");
-    expect(() => new owid().verify(tree)).not.toThrow(/domain/);
-});
-
-// One character more than the maximum is refused when the tree is
-// serialized, with the maximum named in the message.
-test('tree with a domain over the maximum is refused', () => {
-    var tooLong = domainOfLength(maximumDomainLength + 1);
-    expect(tooLong.length).toBe(maximumDomainLength + 1);
-    var tree = domainTree(tooLong);
-
-    expect(() => new owid().verify(tree))
-        .toThrow("OWID domain of '254' characters is longer than the '" +
-            maximumDomainLength + "' character maximum");
-});
-
-// Without the write bound an over long domain in an OWID tree handed to
-// verifyWithPublicKey is serialized into the message and the signature is
-// checked over it, as nothing on that route reads the bytes back. The bound
-// refuses the domain before any signature work, so the check below is that
-// the promise is rejected and that subtle.verify was never reached.
-test('domain over the maximum is refused before any signature work',
+// A domain longer than the maximum can no longer reach a signature check at
+// all. The read refuses it, so there is no OWID to verify with, and an
+// object that merely carries the same field names is not an OWID and is
+// refused as another OWID as well. Both routes are closed here, and the
+// second is checked with a spy so that the refusal is shown to happen before
+// any signature work.
+test('a domain over the maximum cannot reach a signature check',
     async () => {
         var e = signedEnvelope(domain);
-        var o = new owid(e.data);
-        var tree = domainTree(domainOfLength(maximumDomainLength + 1));
+        var o = read(e.data);
+        var fabricated = {
+            version: 3,
+            domain: domainOfLength(maximumDomainLength + 1),
+            date: dateInMinutes,
+            payload: payload
+        };
         var verifySpy = jest.spyOn(nodeCrypto.webcrypto.subtle, 'verify');
 
         try {
-            await expect(o.verifyWithPublicKey(e.publicPem, [tree]))
-                .rejects.toMatch("character maximum");
+            refused(
+                domainEnvelope(fabricated.domain, true),
+                owid.ParseStatus.INVALID_DOMAIN_ENCODING);
+
+            var r = await o.checkSignatureWithPublicKey(
+                e.publicPem, [fabricated]);
+            expect(r.ok).toBe(false);
+            expect(r.status).toBe(
+                owid.SignatureStatus.VERIFICATION_ERROR);
             expect(verifySpy).not.toHaveBeenCalled();
         } finally {
             verifySpy.mockRestore();
