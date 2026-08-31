@@ -83,10 +83,11 @@ against its members rather than against the text of any message.
 |MISSING_INPUT|Nothing was supplied, which covers an absent value, an empty string and a buffer of no bytes, on both surfaces. Not the same as data that stopped part way through a field, which is UNEXPECTED_END.|
 |INVALID_INPUT_TYPE|The input was supplied in a form this surface cannot read.|
 |INVALID_BASE64|The string is not valid base 64, so there are no bytes to read.|
-|UNSUPPORTED_VERSION|The first byte names a version this implementation does not know, which includes the empty marker.|
-|UNEXPECTED_END|The data stopped in the middle of a field.|
+|UNSUPPORTED_VERSION|The first byte names a version this implementation does not know. Version zero is not one of those, because it is known and meaningful, and has ABSENT_NODE of its own.|
+|ABSENT_NODE|The bytes are the absent node marker, version byte zero, which stands for a node that is not there rather than for an identifier. No OWID is handed back. On the framed contract `bytesRead` is 1, so a caller can step over it.|
+|UNEXPECTED_END|The data stopped early. That covers stopping in the middle of a field, and on the framed contract a declared payload that runs past the bytes supplied.|
 |INVALID_DOMAIN_ENCODING|The creator domain is not terminated, or is longer than the published maximum.|
-|BYTE_COUNT_MISMATCH|The declared payload byte count disagrees with the bytes actually present.|
+|BYTE_COUNT_MISMATCH|The declared payload byte count disagrees with the bytes actually present. Only the whole buffer contract reports this, because only there is every byte present by definition.|
 |IMPLEMENTATION_CAPACITY_EXCEEDED|The envelope is structurally consistent but larger than this runtime can hold.|
 |MALFORMED_ENVELOPE|Malformed in a way none of the above describes.|
 
@@ -102,6 +103,13 @@ only: where `parseBytes` requires the declared payload to leave exactly the
 signature, `parseFrame` requires the declared payload and the signature to be
 there and says nothing about the bytes after them. Everything else, the
 version, the domain bound, the date and the statuses, is the same code.
+
+| | `parseBytes` | `parseFrame` |
+|-|-|-|
+|requires|the declared payload leaves **exactly** the signature|the declared payload and the signature are **present**|
+|one trailing byte|`BYTE_COUNT_MISMATCH`|parsed, `bytesRead` stops at the signature|
+|a declared payload running past the bytes supplied|`BYTE_COUNT_MISMATCH`|`UNEXPECTED_END`, because here all that is certain is that what was declared has not arrived|
+|the absent node marker|`ABSENT_NODE`|`ABSENT_NODE`, with `bytesRead` of 1|
 
 The result carries `bytesRead`, the number of bytes the envelope occupied, so
 a caller can move on to the next one. A parse that failed took nothing, so
@@ -127,13 +135,34 @@ The offset is optional and defaults to the start of the buffer. Base 64 has
 no framed surface, because framing is about bytes: decode first, then walk
 the bytes.
 
-### The empty marker
+### The absent node marker
 
-An OWID whose version byte is zero is the empty marker. It carries no
-domain, date, payload or signature, so it can never verify. This library
-refuses it as `UNSUPPORTED_VERSION` rather than handing one back, because an
-OWID with no signature reaching a caller is the one thing having no
-constructor exists to prevent.
+A version byte of zero is the absent node marker. It stands for a node that
+is not there rather than for an identifier, and it carries no domain, date,
+payload or signature, so it can never verify.
+
+No OWID is handed back from it, on either surface, because an OWID with no
+signature reaching a caller is the one thing having no constructor exists to
+prevent. What comes back instead is `ABSENT_NODE`, which says the node was
+deliberately left out rather than that the bytes were wrong. Those are
+different facts and a caller walking a run of frames has to act on them
+differently.
+
+On the framed contract the result reports `bytesRead` of 1, so a caller can
+step over the marker and read the next frame:
+
+```js
+var result = owid.parseFrame(bytes, at);
+if (result.ok) {
+    use(result.owid);
+    at += result.bytesRead;
+} else if (result.status === owid.ParseStatus.ABSENT_NODE) {
+    noteAbsentNode();
+    at += result.bytesRead;
+} else {
+    // Malformed, or the end of the buffer.
+}
+```
 
 Reading and verifying are two questions with two answers. A structurally
 valid identifier whose signature does not match reads successfully and then
@@ -366,7 +395,8 @@ what a read reports, that an OWID cannot be built or changed, and that
 reading and verifying stay two separate questions. The tests in
 `owid.payload-length.test.js` cover the declared payload length and the
 creator domain bound. The tests in `owid.frame.test.js` cover reading one OWID out of a buffer
-that holds several, and that the same bytes are refused by `parseBytes`. The
+that holds several, that the same bytes are refused by `parseBytes`, and
+walking a run that carries an absent node in the middle of it. The
 tests in `owid.status-coverage.test.js` read the source and hold every
 member of both status vocabularies to having either a test that asserts it
 or a comment on the member saying that nothing produces it and why, so a

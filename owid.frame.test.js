@@ -216,17 +216,20 @@ test('the offset defaults to the start of the buffer', () => {
 
 //#region a failed frame takes nothing
 
-// An envelope cut before its signature is refused. The declared payload and
-// the signature must both be there, and here the signature is not, so the
-// declaration disagrees with what is present. Nothing is consumed, so a
-// caller can put the bytes back and wait for more of them.
-test('an envelope truncated before its signature is refused', () => {
+// An envelope cut before its signature is data that stopped early rather
+// than a declaration that disagrees with data all of which is present. On
+// this contract the bytes after the envelope are not for the parse to judge,
+// so all that is certain is that what was declared has not arrived. Nothing
+// is read, so a caller reading from a source still arriving can keep the
+// bytes and wait for more of them, which is the answer a byte count mismatch
+// would have got wrong.
+test('an envelope truncated before its signature is an unexpected end', () => {
     var only = envelope("payload");
     var cut = only.bytes.subarray(0, only.bytes.length - 1);
 
     var r = owid.parseFrame(cut);
 
-    assertRefused(r, owid.ParseStatus.BYTE_COUNT_MISMATCH);
+    assertRefused(r, owid.ParseStatus.UNEXPECTED_END);
     expect(r.declared).toBe(Buffer.from("payload").length);
     expect(r.remaining).toBe(
         Buffer.from("payload").length + signatureLength - 1);
@@ -235,14 +238,27 @@ test('an envelope truncated before its signature is refused', () => {
 // An envelope with no signature bytes at all is the same answer, so a
 // caller sees one status whether the signature is short by one byte or by
 // all sixty four.
-test('an envelope with no signature at all is refused', () => {
+test('an envelope with no signature at all is an unexpected end', () => {
     var only = envelope("payload");
     var cut = only.bytes.subarray(0, only.bytes.length - signatureLength);
 
     var r = owid.parseFrame(cut);
 
-    assertRefused(r, owid.ParseStatus.BYTE_COUNT_MISMATCH);
+    assertRefused(r, owid.ParseStatus.UNEXPECTED_END);
     expect(r.remaining).toBe(Buffer.from("payload").length);
+});
+
+// The count that disagrees belongs to the whole buffer contract, where every
+// byte is present by definition. A frame never reports it, because a frame
+// is never in a position to say that all the bytes are there.
+test('a short frame is never a byte count mismatch', () => {
+    var only = envelope("payload");
+
+    for (var cut = 1; cut < only.bytes.length; cut++) {
+        var r = owid.parseFrame(only.bytes.subarray(0, cut));
+        expect(r.ok).toBe(false);
+        expect(r.status).not.toBe(owid.ParseStatus.BYTE_COUNT_MISMATCH);
+    }
 });
 
 // The second envelope of a pair, cut short, is refused at the offset the
@@ -262,7 +278,7 @@ test('a short second envelope leaves the first one readable', () => {
 
     assertRefused(
         owid.parseFrame(truncated, one.bytesRead),
-        owid.ParseStatus.BYTE_COUNT_MISMATCH);
+        owid.ParseStatus.UNEXPECTED_END);
 });
 
 // The failures a frame shares with a whole buffer report the same statuses,
@@ -285,18 +301,87 @@ test('an unsupported version is refused and takes nothing', () => {
     expect(r.version).toBe(9);
 });
 
-// The empty marker is refused here too. A framed reader is exactly where a
-// lone version byte of zero would otherwise slip through as a one byte
-// envelope with nothing in it.
-test('the empty marker is refused by a framed parse', () => {
+// The absent node marker is what framed reading exists to meet. It hands
+// back no OWID, because it carries no signature, and it reports the one byte
+// it occupied so a caller can step over it and read the next frame. Reading
+// a run of frames is the only place the difference between a node that is
+// deliberately absent and one that is malformed can be acted on.
+test('the absent node marker hands back no OWID and reports one byte', () => {
     var r = owid.parseFrame(new Uint8Array([0]));
 
-    assertRefused(r, owid.ParseStatus.UNSUPPORTED_VERSION);
-    expect(r.version).toBe(0);
+    expect(r.ok).toBe(false);
+    expect(r.owid).toBeNull();
+    expect(r.status).toBe(owid.ParseStatus.ABSENT_NODE);
+    expect(r.bytesRead).toBe(1);
+});
 
-    var inSequence = owid.parseFrame(
-        Buffer.concat([Buffer.from([0]), envelope("after").bytes]), 0);
-    assertRefused(inSequence, owid.ParseStatus.UNSUPPORTED_VERSION);
+test('the absent node marker at the head of a sequence reports one byte',
+    () => {
+        var after = envelope("after");
+        var sequence = Buffer.concat([Buffer.from([0]), after.bytes]);
+
+        var marker = owid.parseFrame(sequence, 0);
+        expect(marker.ok).toBe(false);
+        expect(marker.owid).toBeNull();
+        expect(marker.status).toBe(owid.ParseStatus.ABSENT_NODE);
+        expect(marker.bytesRead).toBe(1);
+
+        // The byte it reported is exactly enough to reach the next envelope.
+        var next = owid.parseFrame(sequence, marker.bytesRead);
+        expect(next.ok).toBe(true);
+        expect(next.owid.payloadAsString()).toBe("after");
+    });
+
+// A run carrying an absent node in the middle of it. This is the case the
+// status exists for: without it a caller walking the run could not tell a
+// node that was deliberately left out from bytes that are simply wrong, and
+// would have to stop at the marker rather than step over it.
+test('a run with an absent node in the middle is walked through', () => {
+    var first = envelope("first");
+    var second = envelope("second");
+    var run = Buffer.concat([
+        first.bytes, Buffer.from([0]), second.bytes]);
+
+    var seen = [];
+    var at = 0;
+    for (;;) {
+        var r = owid.parseFrame(run, at);
+        if (r.ok) {
+            seen.push(r.owid.payloadAsString());
+            at += r.bytesRead;
+        } else if (r.status === owid.ParseStatus.ABSENT_NODE) {
+            // A marker that reported no bytes would leave this loop where it
+            // started, so a caller walking a run would never get past it.
+            expect(r.bytesRead).toBe(1);
+            seen.push(null);
+            at += r.bytesRead;
+        } else {
+            expect(r.status).toBe(owid.ParseStatus.MISSING_INPUT);
+            break;
+        }
+        expect(at).toBeLessThanOrEqual(run.length);
+    }
+
+    expect(seen).toEqual(["first", null, "second"]);
+    expect(at).toBe(run.length);
+});
+
+// Two markers in a row are two absent nodes, not one, so a caller counting
+// the nodes in a run gets the right number.
+test('a run of markers is a run of absent nodes', () => {
+    var run = Buffer.from([0, 0, 0]);
+
+    var at = 0;
+    var count = 0;
+    while (at < run.length) {
+        var r = owid.parseFrame(run, at);
+        expect(r.status).toBe(owid.ParseStatus.ABSENT_NODE);
+        expect(r.bytesRead).toBe(1);
+        at += r.bytesRead;
+        count++;
+    }
+
+    expect(count).toBe(3);
 });
 
 test('an unterminated domain is refused and takes nothing', () => {

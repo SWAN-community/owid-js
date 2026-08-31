@@ -56,6 +56,13 @@ var owid = (function () {
     // four bytes of minutes.
     const supportedVersions = [1, 2, 3];
 
+    // The version byte that stands for an absent node rather than an OWID.
+    // It is one byte and carries nothing after it, so there is no identifier
+    // to hand back, but it is a meaningful thing to meet part way through a
+    // run of envelopes and a caller must be able to tell it apart from data
+    // that is simply wrong.
+    const absentNodeVersion = 0;
+
     // The base year for all OWID dates.
     const ioDateBase = '2020-01-01T00:00:00';
 
@@ -111,16 +118,29 @@ var owid = (function () {
         INVALID_BASE64: "InvalidBase64",
 
         // The first byte names a version this implementation does not know.
-        // The empty marker, version byte zero, is one of those. It carries no
-        // domain, date, payload or signature, so it can never verify, and
-        // letting one through would be the single way an OWID with no
-        // signature could reach a caller, which is what having no constructor
-        // exists to prevent.
+        // Version zero is not one of those, because it is both known and
+        // meaningful, and has ABSENT_NODE of its own below.
         UNSUPPORTED_VERSION: "UnsupportedVersion",
 
-        // The data stopped in the middle of a field. Distinct from
-        // BYTE_COUNT_MISMATCH, which is a declaration that disagrees with data
-        // that is all present.
+        // The bytes are the absent node marker, version byte zero, which
+        // stands for a node that is not there rather than for an identifier.
+        //
+        // No OWID is handed back, because the marker carries no domain, date,
+        // payload or signature and so can never verify, and an OWID with no
+        // signature reaching a caller is the one thing having no constructor
+        // exists to prevent. What a caller gets instead is the fact that a
+        // node was deliberately absent, which is a different thing from the
+        // bytes being malformed, and on the framed contract a bytesRead of
+        // one, so a run of envelopes can be walked straight past it.
+        ABSENT_NODE: "AbsentNode",
+
+        // The data stopped early. That covers stopping in the middle of a
+        // field, and on the framed contract it also covers a declared payload
+        // that runs past the bytes supplied, because there the bytes after
+        // the envelope are not for this parse to judge and all that can be
+        // said is that what was declared has not arrived yet. A caller
+        // reading from a source still arriving needs to know whether to wait
+        // for more bytes or give up, and this is the status that says wait.
         UNEXPECTED_END: "UnexpectedEnd",
 
         // The creator domain is not terminated, or is longer than the
@@ -131,6 +151,11 @@ var owid = (function () {
         // present. Checked before anything is sized by the declaration, so a
         // sender cannot make a reader allocate by claiming a large payload it
         // did not send.
+        //
+        // Only the whole buffer contract reports this, because only there is
+        // every byte present by definition, so a declaration that does not
+        // leave exactly the signature disagrees with data that is all there.
+        // A frame short of its declared payload is UNEXPECTED_END instead.
         BYTE_COUNT_MISMATCH: "ByteCountMismatch",
 
         // The envelope is structurally consistent but larger than this
@@ -369,13 +394,20 @@ var owid = (function () {
 
         var at = from;
         var version = bytes[at++];
+        if (version === absentNodeVersion) {
+            // The absent node marker. No OWID is handed back, because the
+            // marker carries no domain, date, payload or signature and so
+            // could never verify. What is handed back is the fact that the
+            // node was deliberately absent rather than malformed, and, on the
+            // framed contract, the one byte it occupied, so a caller walking
+            // a run of envelopes can step over it and read the next.
+            var absent = {};
+            if (framed) {
+                absent.bytesRead = 1;
+            }
+            return parseFailed(ParseStatus.ABSENT_NODE, absent);
+        }
         if (supportedVersions.indexOf(version) === -1) {
-            // Version zero is the empty marker, and it is refused here with
-            // every other version this library does not know. It carries no
-            // domain, date, payload or signature, so it can never verify, and
-            // an OWID with no signature reaching a caller is the one thing
-            // having no constructor exists to prevent.
-            //
             // Until 30 August 2026 an unknown version read no date at all and
             // carried on, so an envelope naming a version this library does
             // not know could still be parsed as though it were understood.
@@ -448,8 +480,16 @@ var owid = (function () {
             // because what comes after them may be the next envelope. This
             // one comparison is the whole difference between the two
             // surfaces.
+            //
+            // Falling short is an unexpected end rather than a count that
+            // disagrees. Here the bytes after the envelope are not for this
+            // parse to judge, so nothing can be said about a disagreement
+            // with data that is all present, and all that is certain is that
+            // what was declared has not arrived. A caller reading from a
+            // source still arriving needs to know whether to wait for more
+            // bytes or give up, and those are different answers.
             if (remaining < declared + signatureLength) {
-                return failed(ParseStatus.BYTE_COUNT_MISMATCH, {
+                return failed(ParseStatus.UNEXPECTED_END, {
                     declared: declared,
                     remaining: remaining
                 });

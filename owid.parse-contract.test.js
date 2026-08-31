@@ -169,9 +169,9 @@ test('invalid base 64 is reported rather than thrown', () => {
 
 // An unknown version byte is refused rather than read as though it were a
 // version this library understands. Until 30 August 2026 the date field was
-// skipped for an unknown version and reading carried on.
+// skipped for an unknown version and reading carried on. Version zero is not
+// here, because it is known and meaningful and has its own status.
 test.each([
-    [0],
     [4],
     [255],
 ])('version byte %p is unsupported', (version) => {
@@ -183,30 +183,41 @@ test.each([
     expect(r.version).toBe(version);
 });
 
-// The empty marker is a lone version byte of zero. It carries no domain,
-// date, payload or signature, so it can never verify, and letting one
-// through would be the single way an OWID with no signature could reach a
-// caller. It is refused on both surfaces, as an unsupported version, and
-// nothing comes back to be verified.
-test('the empty marker is refused as an unsupported version', () => {
+// The absent node marker is a lone version byte of zero. It stands for a
+// node that is not there rather than for an identifier, and it carries no
+// domain, date, payload or signature, so it can never verify. No OWID comes
+// back from it on either surface, because an OWID with no signature reaching
+// a caller is the one thing having no constructor exists to prevent. What
+// does come back is the reason, which says the node was deliberately absent
+// rather than that the bytes were wrong.
+test('the absent node marker hands back no OWID', () => {
     var lone = new Uint8Array([0]);
 
     var fromBytes = owid.parseBytes(lone);
     var fromBase64 = owid.parse(Buffer.from(lone).toString('base64'));
 
-    assertRefused(fromBytes, owid.ParseStatus.UNSUPPORTED_VERSION);
-    assertRefused(fromBase64, owid.ParseStatus.UNSUPPORTED_VERSION);
-    expect(fromBytes.version).toBe(0);
-    expect(fromBase64.version).toBe(0);
+    assertRefused(fromBytes, owid.ParseStatus.ABSENT_NODE);
+    assertRefused(fromBase64, owid.ParseStatus.ABSENT_NODE);
 });
 
-// A zero version byte followed by anything at all is refused on the version
-// alone, before any of the bytes after it are looked at.
-test('a zero version byte with data after it is still refused', () => {
+// The marker is not an unsupported version, because version zero is both
+// known and meaningful. Calling it unsupported would have told a caller that
+// this library cannot read something it can read perfectly well.
+test('the absent node marker is not an unsupported version', () => {
+    var r = owid.parseBytes(new Uint8Array([0]));
+
+    expect(r.status).toBe(owid.ParseStatus.ABSENT_NODE);
+    expect(r.status).not.toBe(owid.ParseStatus.UNSUPPORTED_VERSION);
+});
+
+// A zero version byte followed by anything at all is answered on the version
+// alone, before any of the bytes after it are looked at. On the whole buffer
+// contract those bytes are a caller mistake either way, and the first and
+// most useful thing to say is that this is a marker and not an identifier.
+test('a zero version byte with data after it is an absent node', () => {
     var r = owid.parseBytes(new Uint8Array([0, 1, 2, 3, 4]));
 
-    assertRefused(r, owid.ParseStatus.UNSUPPORTED_VERSION);
-    expect(r.version).toBe(0);
+    assertRefused(r, owid.ParseStatus.ABSENT_NODE);
 });
 
 // One trailing byte after a complete envelope means the declaration no
