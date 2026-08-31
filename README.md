@@ -55,9 +55,10 @@ result reporting the same three facts:
 A failure result also carries the numbers that disagreed where there are
 any, being `declared` with `present` for a byte count mismatch from
 `parseBytes`, `declared` with `remaining` for one from `parseFrame`, and
-`version` for an unsupported version. It never carries any part of the input, so
-logging a failure cannot log whatever an untrusted sender chose to put in
-it.
+`version` for an unsupported version. Those are counts and the one version
+byte that was not recognised, and nothing else from the input reaches the
+result, so logging a failure cannot log the domain, the payload or any other
+text an untrusted sender chose to put in it.
 
 ```js
 var result = owid.parse(untrusted);
@@ -305,8 +306,9 @@ read.
 
 Every call below is exercised by the test suite, so an example naming
 something that does not exist fails the build rather than misleading the next
-reader. The first example is run as written in
-`owid.parse-contract.test.js`.
+reader. The first example is run in `owid.parse-contract.test.js` against a
+signed fixture, with the verification made against a supplied public key so
+that no end point has to be reached.
 
 Read and verify an OWID.
 
