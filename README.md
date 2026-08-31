@@ -53,8 +53,9 @@ result reporting the same three facts:
 |status|string|`ParseStatus.PARSED` on success, otherwise the specific reason.|
 
 A failure result also carries the numbers that disagreed where there are
-any, being `declared` and `present` for a byte count mismatch and `version`
-for an unsupported version. It never carries any part of the input, so
+any, being `declared` with `present` for a byte count mismatch from
+`parseBytes`, `declared` with `remaining` for one from `parseFrame`, and
+`version` for an unsupported version. It never carries any part of the input, so
 logging a failure cannot log whatever an untrusted sender chose to put in
 it.
 
@@ -66,6 +67,10 @@ if (result.ok) {
     console.log("not an OWID: " + result.status);
 }
 ```
+
+`owid.parseBytes(bytes)` does the same from a byte array, and
+`owid.parseFrame(bytes, at)` reads one out of a buffer that holds several,
+which the next section but one describes.
 
 ### Read statuses
 
@@ -84,6 +89,43 @@ against its members rather than against the text of any message.
 |BYTE_COUNT_MISMATCH|The declared payload byte count disagrees with the bytes actually present.|
 |IMPLEMENTATION_CAPACITY_EXCEEDED|The envelope is structurally consistent but larger than this runtime can hold.|
 |MALFORMED_ENVELOPE|Malformed in a way none of the above describes.|
+
+### One OWID, or one of several
+
+`owid.parseBytes` is given a buffer holding one OWID and nothing else, so
+anything after the signature is data nothing could own and the parse is
+refused.
+
+`owid.parseFrame` is given one of a sequence, so what follows the envelope
+may be the next one and is none of its business. It differs in one place
+only: where `parseBytes` requires the declared payload to leave exactly the
+signature, `parseFrame` requires the declared payload and the signature to be
+there and says nothing about the bytes after them. Everything else, the
+version, the domain bound, the date and the statuses, is the same code.
+
+The result carries `bytesRead`, the number of bytes the envelope occupied, so
+a caller can move on to the next one. A parse that failed took nothing, so
+`bytesRead` is zero and the position a caller is holding does not move.
+Reaching the end of the buffer is `MISSING_INPUT`, which is what ends a loop:
+
+```js
+var at = 0;
+for (;;) {
+    var result = owid.parseFrame(bytes, at);
+    if (!result.ok) {
+        if (result.status !== owid.ParseStatus.MISSING_INPUT) {
+            console.log("stopped on " + result.status);
+        }
+        break;
+    }
+    use(result.owid);
+    at += result.bytesRead;
+}
+```
+
+The offset is optional and defaults to the start of the buffer. Base 64 has
+no framed surface, because framing is about bytes: decode first, then walk
+the bytes.
 
 ### The empty marker
 
@@ -191,8 +233,9 @@ To use OWID-js:
 
 |Operation|Params|Return Type|Description|
 |-|-|-|-|
-|parse|base 64 string|Object|Reads a complete OWID from its base 64 form. Never throws.|
-|parseBytes|Uint8Array|Object|Reads a complete OWID from a buffer holding exactly one. Never throws.|
+|parse|base 64 string|Object|Parses a complete OWID from its base 64 form. Never throws.|
+|parseBytes|Uint8Array|Object|Parses a complete OWID from a buffer holding exactly one, refusing anything after the envelope. Never throws.|
+|parseFrame|Uint8Array, offset (optional)|Object|Parses one OWID out of a buffer that may hold several, reporting `bytesRead`. Does not require the envelope to be the last thing in the buffer. Never throws.|
 |isOwid|any|boolean|True when the value is an OWID this library read.|
 |verify|owid\|owids[]|Promise(bool)|Verifies each of the OWIDs supplied in its own right. Resolves to true when every one of them is genuine.|
 |stopAdvert|domain, return url|Promise|Posts the domain and return URL to the `/stop` end point and redirects the browser to the URL contained in the response.|
@@ -322,7 +365,9 @@ the remote verify end point. The tests in `owid.parse-contract.test.js` cover
 what a read reports, that an OWID cannot be built or changed, and that
 reading and verifying stay two separate questions. The tests in
 `owid.payload-length.test.js` cover the declared payload length and the
-creator domain bound. The tests in `owid.status-coverage.test.js` read the source and hold every
+creator domain bound. The tests in `owid.frame.test.js` cover reading one OWID out of a buffer
+that holds several, and that the same bytes are refused by `parseBytes`. The
+tests in `owid.status-coverage.test.js` read the source and hold every
 member of both status vocabularies to having either a test that asserts it
 or a comment on the member saying that nothing produces it and why, so a
 member added with neither fails the build. The tests in

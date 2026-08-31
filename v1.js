@@ -149,10 +149,12 @@ var owid = (function () {
         // is already understood.
         //
         // Nothing produces this, so no test asserts it. The only place that
-        // names it is the guard on a parse finishing anywhere other than the
-        // end of the buffer, and the byte count check above already makes
-        // that impossible. The guard is kept so that a future change to that
-        // arithmetic cannot silently start accepting trailing bytes.
+        // names it is the guard on a whole buffer parse finishing anywhere
+        // other than the end of the buffer, and the byte count check above
+        // already makes that impossible. A framed parse never reaches the
+        // guard at all, because a frame is allowed to leave bytes after it.
+        // The guard is kept so that a future change to that arithmetic
+        // cannot silently start accepting trailing bytes.
         MALFORMED_ENVELOPE: "MalformedEnvelope"
     });
 
@@ -286,16 +288,19 @@ var owid = (function () {
     }
 
     /**
-     * A read that produced an OWID.
+     * A parse that produced an OWID.
      * @param {Object} instance - the OWID.
+     * @param {Object} [details] - anything the surface reports alongside it.
      * @returns {Object} the result.
      */
-    function parseSucceeded(instance) {
-        return Object.freeze({
-            ok: true,
-            owid: instance,
-            status: ParseStatus.PARSED
-        });
+    function parseSucceeded(instance, details) {
+        var r = { ok: true, owid: instance, status: ParseStatus.PARSED };
+        if (details !== undefined) {
+            Object.keys(details).forEach(function (k) {
+                r[k] = details[k];
+            });
+        }
+        return Object.freeze(r);
     }
 
     /**
@@ -314,7 +319,7 @@ var owid = (function () {
     }
 
     /**
-     * Reads a complete OWID from a buffer holding exactly one.
+     * Parses one OWID out of a buffer, starting where it is told to.
      *
      * The buffer is walked by index and every read is checked against what is
      * left, so a malformed envelope is a comparison that fails rather than an
@@ -322,20 +327,47 @@ var owid = (function () {
      * sending the data chooses how often this fails and how large each attempt
      * is.
      *
-     * @param {Uint8Array} bytes - the envelope.
+     * The two surfaces differ in one place only, which is what each may say
+     * about the bytes after the envelope. A whole buffer holds one OWID and
+     * nothing else, so the declared payload must leave exactly the signature.
+     * A frame is one of a sequence, so the declared payload and the signature
+     * must be there and whatever follows them is no business of this parse,
+     * because it may be the next envelope.
+     *
+     * @param {Uint8Array} bytes - the buffer.
      * @param {string} [data] - the base 64 the bytes came from, when the
      * caller already has it.
      * @param {boolean} owned - true when the bytes belong to this library and
      * no caller can change them afterwards.
+     * @param {number} from - the offset of the first byte of the envelope.
+     * @param {boolean} framed - true when the envelope need not be the whole
+     * of what is left.
      * @returns {Object} the result.
      */
-    function parseOwid(bytes, data, owned) {
+    function parseOwid(bytes, data, owned, from, framed) {
         var total = bytes.length;
-        if (total === 0) {
-            return parseFailed(ParseStatus.MISSING_INPUT);
+
+        /**
+         * A failure, carrying the count a framed caller advances by. A parse
+         * that failed took nothing, so that count is always zero and the
+         * position a caller is holding does not move.
+         * @param {string} status - the ParseStatus.
+         * @param {Object} [details] - numbers describing the disagreement.
+         * @returns {Object} the result.
+         */
+        function failed(status, details) {
+            var d = details === undefined ? {} : details;
+            if (framed) {
+                d.bytesRead = 0;
+            }
+            return parseFailed(status, d);
         }
 
-        var at = 0;
+        if (from >= total) {
+            return failed(ParseStatus.MISSING_INPUT);
+        }
+
+        var at = from;
         var version = bytes[at++];
         if (supportedVersions.indexOf(version) === -1) {
             // Version zero is the empty marker, and it is refused here with
@@ -347,7 +379,7 @@ var owid = (function () {
             // Until 30 August 2026 an unknown version read no date at all and
             // carried on, so an envelope naming a version this library does
             // not know could still be parsed as though it were understood.
-            return parseFailed(
+            return failed(
                 ParseStatus.UNSUPPORTED_VERSION, { version: version });
         }
 
@@ -374,9 +406,9 @@ var owid = (function () {
             // past the maximum without terminating. The second is a domain
             // that cannot be valid rather than data that merely stopped.
             if (at >= total && (at - start) <= maximumDomainLength) {
-                return parseFailed(ParseStatus.UNEXPECTED_END);
+                return failed(ParseStatus.UNEXPECTED_END);
             }
-            return parseFailed(ParseStatus.INVALID_DOMAIN_ENCODING);
+            return failed(ParseStatus.INVALID_DOMAIN_ENCODING);
         }
 
         // The creation date, whose width depends on the version. Version 1
@@ -385,62 +417,88 @@ var owid = (function () {
         var date;
         if (version === 1) {
             if (total - at < 2) {
-                return parseFailed(ParseStatus.UNEXPECTED_END);
+                return failed(ParseStatus.UNEXPECTED_END);
             }
             date = ((bytes[at] << 8) | bytes[at + 1]) * 24 * 60;
             at += 2;
         } else {
             if (total - at < 4) {
-                return parseFailed(ParseStatus.UNEXPECTED_END);
+                return failed(ParseStatus.UNEXPECTED_END);
             }
             date = readUint32(bytes, at);
             at += 4;
         }
 
         if (total - at < 4) {
-            return parseFailed(ParseStatus.UNEXPECTED_END);
+            return failed(ParseStatus.UNEXPECTED_END);
         }
         var declared = readUint32(bytes, at);
         at += 4;
 
-        // The declaration is the sender's claim about a payload not yet read,
-        // so it is compared with what is actually present before anything is
-        // sized by it. The subtraction is ordinary Number arithmetic, which
-        // represents both an unsigned 32 bit count and this difference
-        // exactly, so a buffer with fewer bytes left than a signature needs
-        // gives a negative count rather than wrapping, and a negative count
-        // can never equal a declaration. Reporting that as a truncation would
-        // name a different fault for the same evidence, because what is
-        // certain is that the declared payload cannot leave exactly the
-        // signature the version requires.
-        var present = (total - at) - signatureLength;
-        if (present !== declared) {
-            return parseFailed(ParseStatus.BYTE_COUNT_MISMATCH, {
-                declared: declared,
-                present: present
-            });
+        // The declaration is a claim by the sender about a payload not yet
+        // read, so it is compared with what is actually there before anything
+        // is sized by it. All of this is ordinary Number arithmetic, which
+        // represents an unsigned 32 bit count, that count plus a signature
+        // length, and the difference below, every one of them exactly, so
+        // nothing here can wrap.
+        var remaining = total - at;
+        if (framed) {
+            // A frame needs its declared payload and its signature to be
+            // there, and says nothing at all about what comes after them,
+            // because what comes after them may be the next envelope. This
+            // one comparison is the whole difference between the two
+            // surfaces.
+            if (remaining < declared + signatureLength) {
+                return failed(ParseStatus.BYTE_COUNT_MISMATCH, {
+                    declared: declared,
+                    remaining: remaining
+                });
+            }
+        } else {
+            // A whole buffer holds one OWID and nothing else, so the declared
+            // payload must leave exactly the signature. Subtracting first
+            // gives a negative count when fewer bytes are left than a
+            // signature needs, and a negative count can never equal a
+            // declaration. Reporting that as a truncation would name a
+            // different fault for the same evidence, because what is certain
+            // is that the declared payload cannot leave exactly the signature
+            // the version requires.
+            var present = remaining - signatureLength;
+            if (present !== declared) {
+                return failed(ParseStatus.BYTE_COUNT_MISMATCH, {
+                    declared: declared,
+                    present: present
+                });
+            }
         }
 
         var payloadAt = at;
         at += declared;
         var signatureAt = at;
         at += signatureLength;
-        if (at !== total) {
+        if (!framed && at !== total) {
             // Unreachable while the count check above holds, and kept so a
             // future change to that arithmetic cannot silently start accepting
             // trailing bytes.
-            return parseFailed(ParseStatus.MALFORMED_ENVELOPE);
+            return failed(ParseStatus.MALFORMED_ENVELOPE);
         }
 
         // The envelope is valid, so now, and only now, is it worth a copy. A
         // buffer handed in by a caller is copied so that the caller changing
         // their array afterwards cannot change an OWID whose signature is
         // checked over the bytes as they arrived. The bytes reaching here are
-        // always a plain Uint8Array, which parseBytes below guarantees, so
-        // slice is a copy and not a view.
-        var envelope = owned ? bytes : bytes.slice(0);
-        return parseSucceeded(makeOwid(
-            data, envelope, version, domain, date, payloadAt, signatureAt));
+        // always a plain Uint8Array, which parseBytes and parseFrame below
+        // guarantee, so slice is a copy and not a view. A frame copies only
+        // its own window, so one OWID never holds on to the envelopes either
+        // side of it.
+        var envelope = (owned && from === 0 && at === total)
+            ? bytes
+            : bytes.slice(from, at);
+        var instance = makeOwid(
+            data, envelope, version, domain, date,
+            payloadAt - from, signatureAt - from);
+        return parseSucceeded(
+            instance, framed ? { bytesRead: at - from } : undefined);
     }
 
     /**
@@ -459,11 +517,40 @@ var owid = (function () {
         if (decoded.status !== undefined) {
             return parseFailed(decoded.status);
         }
-        return parseOwid(decoded.bytes, value, true);
+        return parseOwid(decoded.bytes, value, true, 0, false);
     }
 
     /**
-     * Reads a complete OWID from a buffer holding exactly one.
+     * A plain unsigned view over the same memory as the byte array given.
+     *
+     * Reading through this rather than through the value itself means a
+     * signed byte array reads as the unsigned bytes it holds, and a view
+     * starting part way into a larger buffer reads from where it starts. The
+     * view costs nothing, so nothing is sized by the data before it has been
+     * checked.
+     * @param {Object} buffer - any view of single bytes.
+     * @returns {Uint8Array} the view.
+     */
+    function asByteView(buffer) {
+        return new Uint8Array(
+            buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    }
+
+    /**
+     * True when the value is a view of single bytes, tested by the brand
+     * rather than by instanceof, because instanceof asks whether the value
+     * came from this realm's Uint8Array. Bytes handed over from a worker, an
+     * iframe or the Buffer type in node are a different realm's array and
+     * would be refused as the wrong type, which they are not.
+     * @param {*} buffer - the value to test.
+     * @returns {boolean} whether it is a byte array.
+     */
+    function isByteArray(buffer) {
+        return ArrayBuffer.isView(buffer) && buffer.BYTES_PER_ELEMENT === 1;
+    }
+
+    /**
+     * Parses a complete OWID from a buffer holding exactly one.
      * @param {Uint8Array} buffer - the envelope.
      * @returns {Object} the result.
      */
@@ -471,23 +558,39 @@ var owid = (function () {
         if (buffer === undefined || buffer === null) {
             return parseFailed(ParseStatus.MISSING_INPUT);
         }
-        // Any view of single bytes is accepted, tested by the brand rather
-        // than by instanceof, because instanceof asks whether the value came
-        // from this realm's Uint8Array. Bytes handed over from a worker, an
-        // iframe or node's Buffer are a different realm's array and would be
-        // refused as the wrong type, which they are not.
-        if (!ArrayBuffer.isView(buffer) || buffer.BYTES_PER_ELEMENT !== 1) {
+        if (!isByteArray(buffer)) {
             return parseFailed(ParseStatus.INVALID_INPUT_TYPE);
         }
-        // Read through a plain view over the same memory, so a signed byte
-        // array reads as the unsigned bytes it holds and a view starting part
-        // way into a larger buffer reads from where it starts. The view costs
-        // nothing, so nothing is sized by the data before it is checked.
-        return parseOwid(
-            new Uint8Array(
-                buffer.buffer, buffer.byteOffset, buffer.byteLength),
-            undefined,
-            false);
+        return parseOwid(asByteView(buffer), undefined, false, 0, false);
+    }
+
+    /**
+     * Parses one OWID out of a buffer that may hold several, starting at the
+     * offset given.
+     * @param {Uint8Array} buffer - the buffer.
+     * @param {number} [at] - where the envelope starts, 0 by default.
+     * @returns {Object} the result, carrying bytesRead.
+     */
+    function parseFrame(buffer, at) {
+        var from = at === undefined ? 0 : at;
+        if (buffer === undefined || buffer === null) {
+            return parseFailed(
+                ParseStatus.MISSING_INPUT, { bytesRead: 0 });
+        }
+        if (!isByteArray(buffer)) {
+            return parseFailed(
+                ParseStatus.INVALID_INPUT_TYPE, { bytesRead: 0 });
+        }
+        // The offset is this library's own parameter rather than anything the
+        // sender chose, so a value that is not a place in a buffer is the
+        // caller's mistake. It is still answered rather than thrown, because
+        // a surface that never throws is easier to use correctly than one
+        // that throws for one argument out of two.
+        if (!Number.isInteger(from) || from < 0) {
+            return parseFailed(
+                ParseStatus.INVALID_INPUT_TYPE, { bytesRead: 0 });
+        }
+        return parseOwid(asByteView(buffer), undefined, false, from, true);
     }
 
     //#endregion
@@ -1161,14 +1264,48 @@ var owid = (function () {
     };
 
     /**
-     * Reads a complete OWID from a buffer holding exactly one. Data after the
-     * envelope is refused, because on this surface there is nothing else it
-     * could belong to.
+     * Parses a complete OWID from a buffer holding exactly one. Data after
+     * the envelope is refused, because on this surface there is nothing else
+     * it could belong to. Where the buffer holds several OWIDs one after
+     * another, use parseFrame.
      * @param {Uint8Array} buffer - the OWID bytes.
      * @returns {Object} a frozen result with ok, owid and status.
      */
     owid.parseBytes = function (buffer) {
         return parseBytes(buffer);
+    };
+
+    /**
+     * Parses one OWID out of a buffer that may hold several, one after
+     * another, starting at the offset given.
+     *
+     * Unlike parseBytes this does not require the envelope to be the last
+     * thing in the buffer, because what follows it may be the next envelope
+     * rather than rubbish. What it requires is that the declared payload and
+     * the signature are both there, and it says nothing at all about the
+     * bytes after them. That one comparison is the whole difference between
+     * the two surfaces.
+     *
+     * The result carries bytesRead, being the number of bytes the envelope
+     * occupied, so a caller can move on to the next one. A parse that failed
+     * took nothing, so bytesRead is zero and the caller's position does not
+     * move. Reaching the end of the buffer is MISSING_INPUT, which is what
+     * ends a loop:
+     *
+     *     var at = 0;
+     *     for (;;) {
+     *         var r = owid.parseFrame(bytes, at);
+     *         if (!r.ok) { break; }
+     *         use(r.owid);
+     *         at += r.bytesRead;
+     *     }
+     *
+     * @param {Uint8Array} buffer - the buffer, which may hold several OWIDs.
+     * @param {number} [at] - where the envelope starts, 0 by default.
+     * @returns {Object} a frozen result with ok, owid, status and bytesRead.
+     */
+    owid.parseFrame = function (buffer, at) {
+        return parseFrame(buffer, at);
     };
 
     /**
