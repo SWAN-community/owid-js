@@ -737,9 +737,14 @@ var owid = (function () {
          * @returns {string} the payload in hexadecimal.
          */
         instance.payloadAsPrintable = function () {
+            // Two characters per byte, so a byte below 0x10 keeps its
+            // leading zero and the text can be read back to the same bytes.
+            // The other implementations print the same way, so the same
+            // payload prints the same everywhere.
             var s = "";
             for (var i = 0; i < payloadView.length; i++) {
-                s += (payloadView[i] & 0xFF).toString(16);
+                var hex = (payloadView[i] & 0xFF).toString(16);
+                s += hex.length === 1 ? "0" + hex : hex;
             }
             return s;
         };

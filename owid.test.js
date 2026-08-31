@@ -299,9 +299,11 @@ test('party OWID payload accessors return exact values', () => {
     expect(o.domain).toBe("pop-up.swan-demo.uk");
     expect(o.date).toBe(664619);
     expect(o.payloadAsString()).toBe("\u0001\u0003");
-    // payloadAsPrintable does not pad single digit hex values, so the two
-    // payload bytes 0x01 and 0x03 print as "13".
-    expect(o.payloadAsPrintable()).toBe("13");
+    // Two characters per byte, so 0x01 0x03 prints as "0103" and can be
+    // read back to the same bytes, as it does in the other implementations.
+    // It used to print "13", which lost the leading zeros and could not be
+    // told apart from the single byte 0x13.
+    expect(o.payloadAsPrintable()).toBe("0103");
     expect(o.payloadAsBase64()).toBe("AQM=");
     expect(o.signature.length).toBe(64);
 });
