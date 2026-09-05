@@ -196,6 +196,37 @@ test('crypto verify valid OWID passes', () => {
     });
 });
 
+test('crypto verify asks the end point for the version the OWID carries', () => {
+    // Every other OWID in this suite is version 3, the same value a constant
+    // in the path would give, so this is the test that catches a constant
+    // put back. A version 2 OWID must ask the version 2 end point, which
+    // the mocked creator does not serve, so the key is unavailable and the
+    // one request that was made names the right path.
+    var date = Buffer.alloc(4);
+    date.writeUInt32LE(testDateInMinutes);
+    var payload = Buffer.from("example");
+    var length = Buffer.alloc(4);
+    length.writeUInt32LE(payload.length);
+    var unsigned = Buffer.concat([
+        Buffer.from([2]),
+        Buffer.from(creatorDomain, 'ascii'),
+        Buffer.from([0]),
+        date,
+        length,
+        payload
+    ]);
+    var o = read(signOWID(unsigned, creatorKeyPair.privateKey));
+    expect(o.version).toBe(2);
+
+    return o.checkSignature().then(r => {
+        expect(r.status).toBe(owid.SignatureStatus.KEY_UNAVAILABLE);
+        expect(fetch.mock.calls.length).toBe(1);
+        expect(fetch.mock.calls[0][0]).toBe(
+            "//" + creatorDomain + "/owid/api/v2/creator?date=" +
+            testDateInMinutes);
+    });
+});
+
 test('crypto verify sends configured fetch headers', () => {
     var unsigned = buildUnsignedOWID(
         creatorDomain, testDateInMinutes, Buffer.from("example"));
