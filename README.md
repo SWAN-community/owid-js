@@ -22,6 +22,12 @@ public key from their well known end point and verifies the ECDSA signature
 locally. When `crypto.subtle` is not available it falls back to the creator's
 remote verify end point.
 
+Both end points are versioned, `/owid/api/v<version>/creator` and
+`/owid/api/v<version>/verify`, and the version in the path is the version
+byte of the OWID being verified rather than a fixed number, because a
+creator serves each version of the format at its own path and returns 404
+for the others.
+
 The public key is requested for the OWID's own creation date
 (`?date=<minutes>`), so OWIDs signed before a signing-key rotation still
 verify. A creator that does not support the `date` parameter ignores it and
@@ -37,6 +43,12 @@ owid.fetchHeaders = { "X-Api-Key": "your key" };
 The headers are sent to every creator domain that a verification touches,
 so only set a credential that all the creators in the tree are meant to
 see.
+
+A custom header makes the key request a non simple cross origin request, so
+the browser sends a `OPTIONS` preflight first and the creator has to answer
+it with `Access-Control-Allow-Headers` naming that header. A creator that
+does not answer the preflight cannot be given a credential this way, and
+the request never leaves the browser.
 
 ## Reading answers instead of throwing
 
