@@ -140,6 +140,18 @@ fixtures.forEach(f => {
 });
 
 /**
+ * The creator key URL the library must request for an OWID. The version
+ * segment comes from the OWID's own version byte, which is the value the
+ * library uses, so this expectation cannot drift away from the code.
+ * @param {Object} o - the OWID that was read.
+ * @returns {string} the expected URL.
+ */
+function expectedCreatorUrl(o) {
+    return "//" + o.domain + "/owid/api/v" + o.version +
+        "/creator?date=" + o.date;
+}
+
+/**
  * Returns the base 64 string with a single byte changed at the given offset
  * of the decoded byte array.
  * @param {string} encoded - the OWID as base 64.
@@ -164,7 +176,12 @@ beforeEach(() => {
         }
         var url = new URL(urlString);
 
-        if (url.pathname.endsWith("/creator") && publicKeys[url.hostname]) {
+        // Every fixture is a version 3 OWID and a real creator serves each
+        // version of the format at its own path, returning 404 for the
+        // others, so the key is only handed back on the path that names the
+        // version the OWID was written in.
+        if (url.pathname === "/owid/api/v3/creator" &&
+            publicKeys[url.hostname]) {
             return Promise.resolve(JSON.stringify({
                 publicKeySPKI: publicKeys[url.hostname]
             }));
@@ -186,8 +203,8 @@ fixtures.forEach(f => {
             // The library must have used the public key path, so the only
             // request is to the creator end point.
             expect(fetch.mock.calls.length).toBe(1);
-            expect(fetch.mock.calls[0][0]).toBe(
-                "//" + f.domain + "/owid/api/v1/creator?date=" + o.date);
+            expect(fetch.mock.calls[0][0]).toBe(expectedCreatorUrl(o));
+            expect(o.version).toBe(3);
         });
     });
 

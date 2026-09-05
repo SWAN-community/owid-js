@@ -45,6 +45,25 @@ const otherKeyPair = nodeCrypto.generateKeyPairSync('ec', {
 // 2021-04-06 12:59 UTC expressed as minutes since 2020-01-01 00:00 UTC.
 const testDateInMinutes = 664619;
 
+// The version byte every OWID built here is written with. The mocked
+// creator only answers the path for this version, and the expected URL is
+// built from the version the library read back out of the OWID, so the test
+// and the library take the version from the same place and a wrong version
+// in either one fails rather than passing quietly.
+const testVersion = 3;
+
+/**
+ * The creator key URL the library must request for an OWID. The version
+ * segment comes from the OWID's own version byte, which is the value the
+ * library uses, so this expectation cannot drift away from the code.
+ * @param {Object} o - the OWID that was read.
+ * @returns {string} the expected URL.
+ */
+function expectedCreatorUrl(o) {
+    return "//" + o.domain + "/owid/api/v" + o.version +
+        "/creator?date=" + o.date;
+}
+
 /**
  * Reads an OWID that the test expects to be valid, asserting the three facts
  * a read always reports before handing back the OWID itself.
@@ -64,8 +83,9 @@ const wrongKeyDomain = "wrong-key.swan-demo.uk";
 const emptyKeyDomain = "empty-key.swan-demo.uk";
 
 /**
- * Builds the unsigned portion of a version 3 OWID as a byte array in the
- * same form the library serializes for verification.
+ * Builds the unsigned portion of an OWID, at the version named by
+ * testVersion, as a byte array in the same form the library serializes for
+ * verification.
  * @param {string} domain - the creator domain.
  * @param {number} dateInMinutes - minutes since the OWID base date.
  * @param {Buffer} payload - the payload bytes.
@@ -77,7 +97,7 @@ function buildUnsignedOWID(domain, dateInMinutes, payload) {
     var length = Buffer.alloc(4);
     length.writeUInt32LE(payload.length);
     return Buffer.concat([
-        Buffer.from([3]),
+        Buffer.from([testVersion]),
         Buffer.from(domain, 'ascii'),
         Buffer.from([0]),
         date,
@@ -132,7 +152,10 @@ beforeEach(() => {
         }
         var url = new URL(urlString);
 
-        if (url.pathname.endsWith("/creator")) {
+        // A real creator serves each version of the format at its own
+        // path and returns 404 for the others, so answering any version
+        // here would hide a request sent to the wrong one.
+        if (url.pathname === "/owid/api/v" + testVersion + "/creator") {
             // This domain returns a header only PEM with no key body, which
             // exercises the empty public key guard in the library.
             if (url.hostname == emptyKeyDomain) {
@@ -169,8 +192,38 @@ test('crypto verify valid OWID passes', () => {
         // The library must have used the public key path, so the only
         // request is to the creator end point.
         expect(fetch.mock.calls.length).toBe(1);
+        expect(fetch.mock.calls[0][0]).toBe(expectedCreatorUrl(o));
+    });
+});
+
+test('crypto verify asks the end point for the version the OWID carries', () => {
+    // Every other OWID in this suite is version 3, the same value a constant
+    // in the path would give, so this is the test that catches a constant
+    // put back. A version 2 OWID must ask the version 2 end point, which
+    // the mocked creator does not serve, so the key is unavailable and the
+    // one request that was made names the right path.
+    var date = Buffer.alloc(4);
+    date.writeUInt32LE(testDateInMinutes);
+    var payload = Buffer.from("example");
+    var length = Buffer.alloc(4);
+    length.writeUInt32LE(payload.length);
+    var unsigned = Buffer.concat([
+        Buffer.from([2]),
+        Buffer.from(creatorDomain, 'ascii'),
+        Buffer.from([0]),
+        date,
+        length,
+        payload
+    ]);
+    var o = read(signOWID(unsigned, creatorKeyPair.privateKey));
+    expect(o.version).toBe(2);
+
+    return o.checkSignature().then(r => {
+        expect(r.status).toBe(owid.SignatureStatus.KEY_UNAVAILABLE);
+        expect(fetch.mock.calls.length).toBe(1);
         expect(fetch.mock.calls[0][0]).toBe(
-            "//" + creatorDomain + "/owid/api/v1/creator?date=" + testDateInMinutes);
+            "//" + creatorDomain + "/owid/api/v2/creator?date=" +
+            testDateInMinutes);
     });
 });
 

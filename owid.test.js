@@ -66,7 +66,12 @@ beforeEach(() => {
         }
         var url = new URL(urlString);
 
-        if (url.pathname.endsWith("/verify")) {
+        // Every OWID these tests read is version 2, and a real creator
+        // serves each version of the format at its own path, so only the
+        // version 2 verify path answers. A request to any other version
+        // path is the defect this guards against, and it falls through to
+        // the 404 below.
+        if (url.pathname === "/owid/api/v2/verify") {
             // The library sends the OWID being verified as form parameters
             // in the POST body, so read them from there.
             var body = new URLSearchParams(await req.text());

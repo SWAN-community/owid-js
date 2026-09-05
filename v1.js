@@ -1017,6 +1017,23 @@ var owid = (function () {
     }
 
     /**
+     * Builds the URL of one of the creator's end points for the OWID being
+     * verified. The version in the path is the OWID's own version byte,
+     * because a creator serves each version of the format at its own path
+     * and only the end point that understands the version an OWID was
+     * written in can answer for it. Both the key request and the fall back
+     * verify request are built here so the two cannot name different
+     * versions of the same creator.
+     * @param {Object} instance - the OWID being verified.
+     * @param {string} method - the end point, "creator" or "verify".
+     * @returns {string} the URL, with no query string.
+     */
+    function creatorApiUrl(instance, method) {
+        return "//" + instance.domain +
+            "/owid/api/v" + instance.version + "/" + method;
+    }
+
+    /**
      * Fetches the creator's public key and checks the signature here. The key
      * is requested for the OWID's own creation date, so OWIDs signed before a
      * key rotation still verify.
@@ -1027,7 +1044,7 @@ var owid = (function () {
      */
     function verifyWithCreatorKey(instance, unsigned, extra) {
         var subtle = getSubtle();
-        var url = "//" + instance.domain + "/owid/api/v1/creator";
+        var url = creatorApiUrl(instance, "creator");
         if (instance.date != null) {
             url += "?date=" + instance.date;
         }
@@ -1096,8 +1113,7 @@ var owid = (function () {
         var body = new URLSearchParams();
         body.append("parent", encodeBase64(joined));
         body.append("owid", instance.data);
-        var url = "//" + instance.domain +
-            "/owid/api/v" + instance.version + "/verify";
+        var url = creatorApiUrl(instance, "verify");
         return fetch(url, {
             method: "POST",
             mode: "cors",
