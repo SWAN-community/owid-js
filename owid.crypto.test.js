@@ -227,6 +227,33 @@ test('crypto verify asks the end point for the version the OWID carries', () => 
     });
 });
 
+// A creator whose domain answers with a redirect does not get the key at
+// the other end trusted as its own. The library asks fetch not to follow,
+// so the answer is the redirect itself, which is not ok and reads as the
+// key being unavailable, and no second request is made. Without this a
+// network attacker able to bend a creator's DNS, or a misconfigured
+// creator, could substitute the key, and the publisher's fetchHeaders
+// credential would travel to wherever the redirect pointed.
+test('crypto verify does not follow a redirect from the creator', () => {
+    var redirectDomain = "redirecting.example";
+    fetchMock.mockResponse(req => {
+        return Promise.resolve({
+            status: 302,
+            headers: { Location: "https://elsewhere.example/key.pem" },
+            body: ""
+        });
+    });
+    var unsigned = buildUnsignedOWID(
+        redirectDomain, testDateInMinutes, Buffer.from("example"));
+    var o = read(signOWID(unsigned, creatorKeyPair.privateKey));
+
+    return o.checkSignature().then(r => {
+        expect(r.status).toBe(owid.SignatureStatus.KEY_UNAVAILABLE);
+        expect(fetch.mock.calls.length).toBe(1);
+        expect(fetch.mock.calls[0][1].redirect).toBe("manual");
+    });
+});
+
 test('crypto verify sends configured fetch headers', () => {
     var unsigned = buildUnsignedOWID(
         creatorDomain, testDateInMinutes, Buffer.from("example"));

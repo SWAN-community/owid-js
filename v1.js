@@ -1048,9 +1048,20 @@ var owid = (function () {
         if (instance.date != null) {
             url += "?date=" + instance.date;
         }
+        // A redirect is never followed. fetch follows one by default, to
+        // any other origin, so a creator whose domain answered 302 to
+        // some other place would have that other place's key trusted
+        // as its own, and a network attacker able to bend the creator's
+        // DNS, or a creator that was simply misconfigured, could put a
+        // key there and have forgeries verify. It would also carry
+        // owid.fetchHeaders, a publisher's credential, to wherever the
+        // redirect pointed. With manual the browser hands back an opaque
+        // redirect that is not ok, which reads below as the key being
+        // unavailable, which it is.
         return fetch(url, {
             mode: "cors",
             cache: "default",
+            redirect: "manual",
             headers: owid.fetchHeaders
         }).then(function (r) {
             if (r.ok) {
@@ -1114,10 +1125,14 @@ var owid = (function () {
         body.append("parent", encodeBase64(joined));
         body.append("owid", instance.data);
         var url = creatorApiUrl(instance, "verify");
+        // Not followed either, for the same reasons as the creator
+        // request, and because a redirected POST would resend the
+        // identifier and the credential to wherever it pointed.
         return fetch(url, {
             method: "POST",
             mode: "cors",
             cache: "no-cache",
+            redirect: "manual",
             headers: owid.fetchHeaders,
             body: body
         }).then(function (r) {
