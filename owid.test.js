@@ -225,13 +225,6 @@ test('module level verify of an empty string rejects', () => {
         "OWID(s) must have a value and cannot be an empty string.");
 });
 
-test('verify with an empty string as another OWID rejects', () => {
-    var o = read(testCreatorOWID);
-
-    return expect(o.verify("")).rejects.toBe(
-        "OWID(s) must have a value and cannot be an empty string.");
-});
-
 // The date field of the creator fixture decodes to 664619 minutes after the
 // OWID base date of 2020-01-01 00:00, which is 2021-04-06 12:59. Note that
 // the implementation reads the base date without an explicit UTC marker, so

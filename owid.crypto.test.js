@@ -113,15 +113,11 @@ function buildUnsignedOWID(domain, dateInMinutes, payload) {
  * 64 byte r and s form that the OWID format requires.
  * @param {Buffer} unsigned - the unsigned OWID bytes.
  * @param {Object} privateKey - the signing key.
- * @param {Buffer} [extra] - additional data covered by the signature, used
  * when one OWID signs another.
  * @returns {string} the complete OWID as base 64.
  */
-function signOWID(unsigned, privateKey, extra) {
-    var message = extra ?
-        Buffer.concat([unsigned, extra]) :
-        unsigned;
-    var signature = nodeCrypto.sign('sha256', message, {
+function signOWID(unsigned, privateKey) {
+    var signature = nodeCrypto.sign('sha256', unsigned, {
         key: privateKey,
         dsaEncoding: 'ieee-p1363'
     });
@@ -161,7 +157,8 @@ beforeEach(() => {
             // exercises the empty public key guard in the library.
             if (url.hostname == emptyKeyDomain) {
                 return Promise.resolve(JSON.stringify({
-                    publicKeySPKI:
+                    format: "spki",
+                    publicKey:
                         "-----BEGIN PUBLIC KEY-----\n" +
                         "-----END PUBLIC KEY-----"
                 }));
@@ -170,7 +167,8 @@ beforeEach(() => {
             // a creator checks for before answering and a client refuses.
             if (url.hostname == contradictorySpanDomain) {
                 return Promise.resolve(JSON.stringify({
-                    publicKeySPKI: creatorKeyPair.publicKey.export({
+                    format: "spki",
+                    publicKey: creatorKeyPair.publicKey.export({
                         type: 'spki',
                         format: 'pem'
                     }),
@@ -182,7 +180,8 @@ beforeEach(() => {
                 otherKeyPair :
                 creatorKeyPair;
             return Promise.resolve(JSON.stringify({
-                publicKeySPKI: keyPair.publicKey.export({
+                format: "spki",
+                    publicKey: keyPair.publicKey.export({
                     type: 'spki',
                     format: 'pem'
                 })
@@ -334,26 +333,6 @@ test('crypto verify wrong public key fails', () => {
     });
 });
 
-test('crypto verify party OWID signed with creator OWID passes', () => {
-    var creatorUnsigned = buildUnsignedOWID(
-        creatorDomain, testDateInMinutes, Buffer.from("example"));
-    var creator = read(
-        signOWID(creatorUnsigned, creatorKeyPair.privateKey));
-
-    // The party signature covers the party bytes followed by the complete
-    // creator OWID, matching how SWAN parties sign a transaction.
-    var partyUnsigned = buildUnsignedOWID(
-        creatorDomain, testDateInMinutes, Buffer.from([1, 3]));
-    var party = read(signOWID(
-        partyUnsigned,
-        creatorKeyPair.privateKey,
-        Buffer.from(creator.data, 'base64')));
-
-    return party.verify(creator).then(valid => {
-        expect(valid).toBe(true);
-    });
-});
-
 test('crypto verify empty public key PEM rejects', () => {
     var unsigned = buildUnsignedOWID(
         emptyKeyDomain, testDateInMinutes, Buffer.from("example"));
@@ -364,26 +343,6 @@ test('crypto verify empty public key PEM rejects', () => {
 
     return expect(o.verify()).rejects.toBe(
         "public key PEM contains no key data");
-});
-
-test('crypto verify party OWID with wrong creator OWID fails', () => {
-    var creatorUnsigned = buildUnsignedOWID(
-        creatorDomain, testDateInMinutes, Buffer.from("example"));
-    var creator = read(
-        signOWID(creatorUnsigned, creatorKeyPair.privateKey));
-
-    // The party signature covers different additional data to the creator
-    // OWID passed to verify, so verification must fail.
-    var partyUnsigned = buildUnsignedOWID(
-        creatorDomain, testDateInMinutes, Buffer.from([1, 3]));
-    var party = read(signOWID(
-        partyUnsigned,
-        creatorKeyPair.privateKey,
-        Buffer.from("different data")));
-
-    return party.verify(creator).then(valid => {
-        expect(valid).toBe(false);
-    });
 });
 
 // The following tests exercise the offline verifyWithPublicKey path, which
@@ -430,27 +389,6 @@ test('verifyWithPublicKey tampered signature fails', () => {
     return o.verifyWithPublicKey(creatorPublicPem).then(valid => {
         expect(valid).toBe(false);
     });
-});
-
-test('verifyWithPublicKey covers others in the signature', () => {
-    var creatorUnsigned = buildUnsignedOWID(
-        creatorDomain, testDateInMinutes, Buffer.from("example"));
-    var creator = read(
-        signOWID(creatorUnsigned, creatorKeyPair.privateKey));
-
-    // The party signature covers the party bytes followed by the complete
-    // creator OWID, so the creator OWID is supplied as an "other".
-    var partyUnsigned = buildUnsignedOWID(
-        creatorDomain, testDateInMinutes, Buffer.from([1, 3]));
-    var party = read(signOWID(
-        partyUnsigned,
-        creatorKeyPair.privateKey,
-        Buffer.from(creator.data, 'base64')));
-
-    return party.verifyWithPublicKey(creatorPublicPem, [creator.data])
-        .then(valid => {
-            expect(valid).toBe(true);
-        });
 });
 
 test('verifyWithPublicKey empty PEM rejects rather than throwing', () => {

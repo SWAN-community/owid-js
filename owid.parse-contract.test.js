@@ -558,33 +558,6 @@ test('an object that looks like an OWID is not one', () => {
     expect(owid.isOwid(real)).toBe(true);
 });
 
-// The same look alike is refused where it would otherwise be folded into the
-// bytes a signature is checked over.
-test('a look alike is refused as another OWID', async () => {
-    var e = signedEnvelope();
-    var o = owid.parse(e.data).owid;
-    var fake = { version: 3, domain: domain, date: 1, payload: payload };
-
-    var detailed = await o.checkSignatureWithPublicKey(e.publicPem, [fake]);
-
-    expect(detailed.ok).toBe(false);
-    expect(detailed.status).toBe(owid.SignatureStatus.VERIFICATION_ERROR);
-    expect(detailed.message).toMatch("owid.parse");
-});
-
-// A failure message names the type that was supplied and never the value, so
-// logging a refusal cannot log whatever an untrusted sender put in it.
-test('a refusal names no part of the input', async () => {
-    var e = signedEnvelope();
-    var o = owid.parse(e.data).owid;
-    var secret = "aSecretACallerShouldNotSeeLogged";
-
-    var detailed = await o.checkSignatureWithPublicKey(
-        e.publicPem, [{ secret: secret }]);
-
-    expect(detailed.message).not.toMatch(secret);
-});
-
 //#endregion
 
 //#region an OWID cannot be changed

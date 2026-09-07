@@ -159,7 +159,8 @@ function mockCreator(options) {
             });
         }
         return Promise.resolve(JSON.stringify({
-            publicKeySPKI: key.publicKey
+            format: "spki",
+            publicKey: key.publicKey
         }));
     });
 }

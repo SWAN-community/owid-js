@@ -31,9 +31,10 @@ for the others.
 The public key is requested for the OWID's own creation date
 (`?format=spki&date=<minutes>`), so OWIDs signed before a signing-key rotation
 still verify. The answer is the JSON form the specification requires, the key
-as `publicKeySPKI` with the moments it is valid from and to. This library
-reads the key and checks that the span does not contradict itself. It holds
-no cache, so it has no use for the span beyond that.
+as `publicKey`, its encoding as `format`, and the moments it is valid from and
+to. This library asks for and reads the one encoding defined, `spki`, and
+checks that the span does not contradict itself. It holds no cache, so it has
+no use for the span beyond that.
 
 This library holds no key cache of its own, unlike the server side ports,
 which each keep one in memory. The request is made with `cache: "default"`
@@ -354,27 +355,6 @@ o.verify()
     .catch(error => console.log(error)); // The question could not be answered.
 ```
 
-Verify one OWID that was signed with another OWID.
-
-```js
-var o = owid.parse("[signed OWID]").owid;
-var other = owid.parse("[other signed OWID]").owid;
-
-o.verify(other)
-    .then(valid => console.log(valid))
-    .catch(error => console.log(error));
-```
-
-Verify one OWID with multiple OWID base 64 strings.
-
-```js
-var o = owid.parse("[signed OWID]").owid;
-
-o.verify(["[signed OWID 1]", "[signed OWID 2]", "[signed OWID 3]"])
-    .then(valid => console.log(valid))
-    .catch(error => console.log(error));
-```
-
 Verify several OWIDs, each in its own right.
 
 ```js
@@ -402,7 +382,7 @@ owid.parse("[signed OWID]").owid.checkSignature().then(r => {
 |-|-|
 |`var o = new owid(s);`|`var r = owid.parse(s); if (r.ok) { var o = r.owid; }`|
 |`try { new owid(s) } catch (e) { }`|`if (!owid.parse(s).ok) { }`|
-|`new owid().verify(others)`|`owid.verify(others)`|
+|`new owid().verify(others)`|`owid.verify()`, a signature covers its own OWID alone|
 |`new owid().parse(s)`|`owid.parse(s)`|
 |`new owid().stop(undefined, d, r)`|`owid.stopAdvert(d, r)`|
 |`o.owid.version`|`o.version`|

@@ -758,34 +758,28 @@ var owid = (function () {
         };
 
         /**
-         * Verifies this OWID, optionally together with other OWIDs that the
-         * same signature covered. Where the runtime provides Web Crypto the
+         * Verifies this OWID. Where the runtime provides Web Crypto the
          * creator's public key is fetched and the signature checked here, and
          * where it does not the creator's verify end point is asked instead.
-         * @param {(Object|Object[]|string|string[])} [others] - other OWIDs
-         * covered by the signature, in the order they were signed.
          * @returns {Promise} resolves to true when the signature is genuine
          * and false when it is not, and rejects when the question could not be
          * answered.
          */
-        instance.verify = function (others) {
-            return asBoolean(instance.checkSignature(others));
+        instance.verify = function () {
+            return asBoolean(instance.checkSignature());
         };
 
         /**
          * Verifies this OWID and reports the outcome as a named status, so
          * that "could not check" stays apart from "does not match".
-         * @param {(Object|Object[]|string|string[])} [others] - other OWIDs
-         * covered by the signature, in the order they were signed.
          * @returns {Promise} resolves to a frozen result carrying ok, status
          * and, where the check could not be completed, a message and a cause.
          */
-        instance.checkSignature = function (others) {
+        instance.checkSignature = function () {
             return Promise.resolve().then(function () {
-                var extra = othersAsBytes(others);
                 return hasSubtle()
-                    ? verifyWithCreatorKey(instance, unsignedView, extra)
-                    : verifyWithCreatorApi(instance, extra);
+                    ? verifyWithCreatorKey(instance, unsignedView)
+                    : verifyWithCreatorApi(instance);
             }).catch(asSignatureResult);
         };
 
@@ -793,33 +787,28 @@ var owid = (function () {
          * Verifies this OWID offline against a caller supplied SPKI public key
          * PEM, contacting no network end point.
          * @param {string} publicPem - the creator public key in SPKI PEM form.
-         * @param {(Object|Object[]|string|string[])} [others] - other OWIDs
-         * covered by the signature, in the order they were signed.
          * @returns {Promise} resolves to true when the signature is genuine
          * and false when it is not, and rejects when the question could not be
          * answered.
          */
-        instance.verifyWithPublicKey = function (publicPem, others) {
+        instance.verifyWithPublicKey = function (publicPem) {
             return asBoolean(
-                instance.checkSignatureWithPublicKey(publicPem, others));
+                instance.checkSignatureWithPublicKey(publicPem));
         };
 
         /**
          * Verifies this OWID offline against a caller supplied SPKI public key
          * PEM and reports the outcome as a named status.
          * @param {string} publicPem - the creator public key in SPKI PEM form.
-         * @param {(Object|Object[]|string|string[])} [others] - other OWIDs
-         * covered by the signature, in the order they were signed.
          * @returns {Promise} resolves to a frozen result carrying ok, status
          * and, where the check could not be completed, a message and a cause.
          */
-        instance.checkSignatureWithPublicKey = function (publicPem, others) {
+        instance.checkSignatureWithPublicKey = function (publicPem) {
             return Promise.resolve().then(function () {
-                var extra = othersAsBytes(others);
                 var subtle = getSubtle();
                 return importSpkiKey(subtle, publicPem).then(function (key) {
                     return checkSignature(
-                        subtle, key, signatureView, unsignedView, extra);
+                        subtle, key, signatureView, unsignedView);
                 }, function (e) {
                     throw failure(
                         SignatureStatus.INVALID_KEY,
@@ -985,21 +974,12 @@ var owid = (function () {
      * @param {Object} subtle - the SubtleCrypto implementation.
      * @param {Object} key - the imported public key.
      * @param {Uint8Array} signature - the signature bytes.
-     * @param {Uint8Array} unsigned - this OWID without its signature.
-     * @param {Uint8Array[]} extra - the other OWIDs' complete bytes.
+     * @param {Uint8Array} unsigned - this OWID without its signature, which
+     * is everything the signature covers.
      * @returns {Promise} resolves to a result.
      */
-    function checkSignature(subtle, key, signature, unsigned, extra) {
-        var total = unsigned.length;
-        extra.forEach(function (p) { total += p.length; });
-        var message = new Uint8Array(total);
-        message.set(unsigned);
-        var offset = unsigned.length;
-        extra.forEach(function (p) {
-            message.set(p, offset);
-            offset += p.length;
-        });
-        return subtle.verify(ECDSA, key, signature, message).then(
+    function checkSignature(subtle, key, signature, unsigned) {
+        return subtle.verify(ECDSA, key, signature, unsigned).then(
             function (valid) {
                 return Object.freeze({
                     ok: valid === true,
@@ -1039,10 +1019,9 @@ var owid = (function () {
      * key rotation still verify.
      * @param {Object} instance - the OWID being verified.
      * @param {Uint8Array} unsigned - the OWID without its signature.
-     * @param {Uint8Array[]} extra - the other OWIDs' complete bytes.
      * @returns {Promise} resolves to a result.
      */
-    function verifyWithCreatorKey(instance, unsigned, extra) {
+    function verifyWithCreatorKey(instance, unsigned) {
         var subtle = getSubtle();
         var url = creatorApiUrl(instance, "public-key") + "?format=spki";
         if (instance.date != null) {
@@ -1085,11 +1064,18 @@ var owid = (function () {
                 "the public key could not be fetched",
                 e);
         }).then(function (c) {
-            if (!c || typeof c.publicKeySPKI !== "string") {
+            if (!c || typeof c.publicKey !== "string") {
                 throw failure(
                     SignatureStatus.VERIFICATION_ERROR,
                     "the public key response carries no key",
                     "public key PEM contains no key data");
+            }
+            if (c.format !== undefined && c.format !== "spki") {
+                throw failure(
+                    SignatureStatus.INVALID_KEY,
+                    "the public key response states a format this library does not read",
+                    "the only format read is spki and the response states '" +
+                    c.format + "'");
             }
             if (spanContradictsItself(c)) {
                 throw failure(
@@ -1097,7 +1083,7 @@ var owid = (function () {
                     "the public key response states a span that contradicts itself",
                     "validTo must come with validFrom and be later than it");
             }
-            return importSpkiKey(subtle, c.publicKeySPKI).then(
+            return importSpkiKey(subtle, c.publicKey).then(
                 undefined,
                 function (e) {
                     throw failure(
@@ -1107,7 +1093,7 @@ var owid = (function () {
                 });
         }).then(function (key) {
             return checkSignature(
-                subtle, key, instance.signature, unsigned, extra);
+                subtle, key, instance.signature, unsigned);
         });
     }
 
@@ -1135,20 +1121,10 @@ var owid = (function () {
      * Asks the creator's verify end point, which is the route taken when the
      * runtime provides no Web Crypto.
      * @param {Object} instance - the OWID being verified.
-     * @param {Uint8Array[]} extra - the other OWIDs' complete bytes.
      * @returns {Promise} resolves to a result.
      */
-    function verifyWithCreatorApi(instance, extra) {
-        var total = 0;
-        extra.forEach(function (p) { total += p.length; });
-        var joined = new Uint8Array(total);
-        var offset = 0;
-        extra.forEach(function (p) {
-            joined.set(p, offset);
-            offset += p.length;
-        });
+    function verifyWithCreatorApi(instance) {
         var body = new URLSearchParams();
-        body.append("parent", encodeBase64(joined));
         body.append("owid", instance.data);
         var url = creatorApiUrl(instance, "verify");
         // Not followed either, for the same reasons as the public key
@@ -1206,57 +1182,6 @@ var owid = (function () {
     //#region private other OWIDs
 
     /**
-     * Turns whatever a caller passed as the other OWIDs covered by a signature
-     * into their complete bytes, in the order given. Only base 64 strings and
-     * OWIDs this library read are accepted, because an object that merely
-     * looks like an OWID has never been read from anything and carries no
-     * signature of its own.
-     * @param {(Object|Object[]|string|string[])} [others] - the other OWIDs.
-     * @returns {Uint8Array[]} their bytes.
-     */
-    function othersAsBytes(others) {
-        if (others === undefined || others === null) {
-            return [];
-        }
-        return collectOthers([others], 1);
-    }
-
-    /**
-     * Collects the other OWIDs from an array, tracking the depth so that a
-     * reference loop cannot run away.
-     * @param {Array} others - the other OWIDs.
-     * @param {number} depth - the current depth.
-     * @returns {Uint8Array[]} their bytes.
-     */
-    function collectOthers(others, depth) {
-        if (depth > maxVerifyDepth) {
-            throw failure(
-                SignatureStatus.VERIFICATION_ERROR,
-                "maximum depth reached when reading the other OWIDs, so " +
-                "check that the OWIDs provided have no reference loop");
-        }
-        var c = [];
-        others.forEach(function (o) {
-            if (o === undefined || o === null) {
-                return;
-            }
-            if (typeof o === "string") {
-                c = c.concat(bytesFromString(o));
-            } else if (Array.isArray(o)) {
-                c = c.concat(collectOthers(o, depth + 1));
-            } else if (instances.has(o)) {
-                c.push(bytesOf(o));
-            } else {
-                throw failure(
-                    SignatureStatus.VERIFICATION_ERROR,
-                    "an other OWID must be a base 64 string or an OWID from " +
-                    "owid.parse, and a '" + typeof o + "' was supplied");
-            }
-        });
-        return c;
-    }
-
-    /**
      * Splits a string that may carry several base 64 OWIDs on whatever
      * separators it uses, and decodes each one.
      * @param {string} o - the base 64 string or strings.
@@ -1308,15 +1233,6 @@ var owid = (function () {
         return characters.map(function (c) {
             return "^]\\-".indexOf(c) === -1 ? c : "\\" + c;
         }).join("");
-    }
-
-    /**
-     * The complete bytes of an OWID this library read.
-     * @param {Object} instance - the OWID.
-     * @returns {Uint8Array} its bytes.
-     */
-    function bytesOf(instance) {
-        return instances.get(instance);
     }
 
     //#endregion
