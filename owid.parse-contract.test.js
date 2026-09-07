@@ -347,12 +347,13 @@ test('changing a Buffer afterwards does not change the OWID', () => {
 test('writing into a payload read from a Buffer does not change the OWID',
     () => {
         var o = owid.parseBytes(Buffer.from(signedEnvelope().bytes)).owid;
+        var signature = Buffer.from(o.signature);
 
         o.payload.fill(0x41);
         o.signature.fill(0x41);
 
         expect(Buffer.from(o.payload).equals(payload)).toBe(true);
-        expect(o.signature[0]).not.toBe(0x41);
+        expect(Buffer.from(o.signature).equals(signature)).toBe(true);
     });
 
 // The base 64 decode running out of room is this runtime having nowhere to
