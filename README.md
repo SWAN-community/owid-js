@@ -33,6 +33,14 @@ The public key is requested for the OWID's own creation date
 verify. A creator that does not support the `date` parameter ignores it and
 returns its current key.
 
+This library holds no key cache of its own, unlike the server side ports,
+which each keep one in memory. The request is made with `cache: "default"`
+so the browser's own HTTP cache answers a repeat request according to the
+headers the creator sent. That is deliberate. A cache in the page would
+duplicate what the browser already does, would not survive a reload, and
+would ignore the creator's own expiry headers. The absence is not an
+oversight and nothing needs adding here.
+
 Servers MAY require a credential on the creator end point. Supply the
 required headers via `owid.fetchHeaders` before verifying:
 
