@@ -61,7 +61,7 @@ const testVersion = 3;
  */
 function expectedCreatorUrl(o) {
     return "//" + o.domain + "/owid/api/v" + o.version +
-        "/creator?date=" + o.date;
+        "/public-key?format=spki&date=" + o.date;
 }
 
 /**
@@ -81,6 +81,7 @@ function read(data) {
 const creatorDomain = "creator.swan-demo.uk";
 const wrongKeyDomain = "wrong-key.swan-demo.uk";
 const emptyKeyDomain = "empty-key.swan-demo.uk";
+const contradictorySpanDomain = "contradictory-span.swan-demo.uk";
 
 /**
  * Builds the unsigned portion of an OWID, at the version named by
@@ -155,7 +156,7 @@ beforeEach(() => {
         // A real creator serves each version of the format at its own
         // path and returns 404 for the others, so answering any version
         // here would hide a request sent to the wrong one.
-        if (url.pathname === "/owid/api/v" + testVersion + "/creator") {
+        if (url.pathname === "/owid/api/v" + testVersion + "/public-key") {
             // This domain returns a header only PEM with no key body, which
             // exercises the empty public key guard in the library.
             if (url.hostname == emptyKeyDomain) {
@@ -163,6 +164,18 @@ beforeEach(() => {
                     publicKeySPKI:
                         "-----BEGIN PUBLIC KEY-----\n" +
                         "-----END PUBLIC KEY-----"
+                }));
+            }
+            // This domain states a span that ends before it starts, which
+            // a creator checks for before answering and a client refuses.
+            if (url.hostname == contradictorySpanDomain) {
+                return Promise.resolve(JSON.stringify({
+                    publicKeySPKI: creatorKeyPair.publicKey.export({
+                        type: 'spki',
+                        format: 'pem'
+                    }),
+                    validFrom: "2026-09-07T00:00:00Z",
+                    validTo: "2026-09-01T00:00:00Z"
                 }));
             }
             var keyPair = url.hostname == wrongKeyDomain ?
@@ -190,7 +203,7 @@ test('crypto verify valid OWID passes', () => {
     return o.verify().then(valid => {
         expect(valid).toBe(true);
         // The library must have used the public key path, so the only
-        // request is to the creator end point.
+        // request is to the creator's key end point.
         expect(fetch.mock.calls.length).toBe(1);
         expect(fetch.mock.calls[0][0]).toBe(expectedCreatorUrl(o));
     });
@@ -222,7 +235,7 @@ test('crypto verify asks the end point for the version the OWID carries', () => 
         expect(r.status).toBe(owid.SignatureStatus.KEY_UNAVAILABLE);
         expect(fetch.mock.calls.length).toBe(1);
         expect(fetch.mock.calls[0][0]).toBe(
-            "//" + creatorDomain + "/owid/api/v2/creator?date=" +
+            "//" + creatorDomain + "/owid/api/v2/public-key?format=spki&date=" +
             testDateInMinutes);
     });
 });
@@ -251,6 +264,20 @@ test('crypto verify does not follow a redirect from the creator', () => {
         expect(r.status).toBe(owid.SignatureStatus.KEY_UNAVAILABLE);
         expect(fetch.mock.calls.length).toBe(1);
         expect(fetch.mock.calls[0][1].redirect).toBe("manual");
+    });
+});
+
+test('crypto verify refuses a key whose stated span contradicts itself', () => {
+    // The key itself would verify the signature, but the creator's answer
+    // fails the check a creator applies before sending it, so the answer is
+    // not trusted and the key is reported as one that cannot be read.
+    var unsigned = buildUnsignedOWID(
+        contradictorySpanDomain, testDateInMinutes, Buffer.from("example"));
+    var o = read(signOWID(unsigned, creatorKeyPair.privateKey));
+
+    return o.checkSignature().then(r => {
+        expect(r.status).toBe(owid.SignatureStatus.INVALID_KEY);
+        expect(fetch.mock.calls.length).toBe(1);
     });
 });
 
@@ -298,7 +325,7 @@ test('crypto verify tampered payload fails', () => {
 test('crypto verify wrong public key fails', () => {
     var unsigned = buildUnsignedOWID(
         wrongKeyDomain, testDateInMinutes, Buffer.from("example"));
-    // The OWID is signed correctly but the mocked creator end point for
+    // The OWID is signed correctly but the mocked key end point for
     // this domain returns a different public key.
     var o = read(signOWID(unsigned, creatorKeyPair.privateKey));
 
@@ -330,7 +357,7 @@ test('crypto verify party OWID signed with creator OWID passes', () => {
 test('crypto verify empty public key PEM rejects', () => {
     var unsigned = buildUnsignedOWID(
         emptyKeyDomain, testDateInMinutes, Buffer.from("example"));
-    // The OWID is signed correctly but the mocked creator end point for this
+    // The OWID is signed correctly but the mocked key end point for this
     // domain returns a header only PEM with no key data, so the import must
     // reject with the clear message rather than an opaque DOMException.
     var o = read(signOWID(unsigned, creatorKeyPair.privateKey));

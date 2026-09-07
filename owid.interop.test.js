@@ -21,7 +21,7 @@
 // verified all of the fixtures and rejected tampered copies. As in
 // owid.crypto.test.js the tests exercise the local public key verification
 // path. Node 24 provides a web crypto implementation, so it is exposed here
-// in the same way a browser would, and the creator end point is mocked to
+// in the same way a browser would, and the key end point is mocked to
 // return the public key matching each fixture's signing key.
 
 const owid = require('./v1');
@@ -148,7 +148,7 @@ fixtures.forEach(f => {
  */
 function expectedCreatorUrl(o) {
     return "//" + o.domain + "/owid/api/v" + o.version +
-        "/creator?date=" + o.date;
+        "/public-key?format=spki&date=" + o.date;
 }
 
 /**
@@ -180,7 +180,7 @@ beforeEach(() => {
         // version of the format at its own path, returning 404 for the
         // others, so the key is only handed back on the path that names the
         // version the OWID was written in.
-        if (url.pathname === "/owid/api/v3/creator" &&
+        if (url.pathname === "/owid/api/v3/public-key" &&
             publicKeys[url.hostname]) {
             return Promise.resolve(JSON.stringify({
                 publicKeySPKI: publicKeys[url.hostname]
@@ -201,7 +201,7 @@ fixtures.forEach(f => {
         return o.verify().then(valid => {
             expect(valid).toBe(true);
             // The library must have used the public key path, so the only
-            // request is to the creator end point.
+            // request is to the creator's key end point.
             expect(fetch.mock.calls.length).toBe(1);
             expect(fetch.mock.calls[0][0]).toBe(expectedCreatorUrl(o));
             expect(o.version).toBe(3);

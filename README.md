@@ -22,16 +22,18 @@ public key from their well known end point and verifies the ECDSA signature
 locally. When `crypto.subtle` is not available it falls back to the creator's
 remote verify end point.
 
-Both end points are versioned, `/owid/api/v<version>/creator` and
+Both end points are versioned, `/owid/api/v<version>/public-key` and
 `/owid/api/v<version>/verify`, and the version in the path is the version
 byte of the OWID being verified rather than a fixed number, because a
 creator serves each version of the format at its own path and returns 404
 for the others.
 
 The public key is requested for the OWID's own creation date
-(`?date=<minutes>`), so OWIDs signed before a signing-key rotation still
-verify. A creator that does not support the `date` parameter ignores it and
-returns its current key.
+(`?format=spki&date=<minutes>`), so OWIDs signed before a signing-key rotation
+still verify. The answer is the JSON form the specification requires, the key
+as `publicKeySPKI` with the moments it is valid from and to. This library
+reads the key and checks that the span does not contradict itself. It holds
+no cache, so it has no use for the span beyond that.
 
 This library holds no key cache of its own, unlike the server side ports,
 which each keep one in memory. The request is made with `cache: "default"`
@@ -41,7 +43,7 @@ duplicate what the browser already does, would not survive a reload, and
 would ignore the creator's own expiry headers. The absence is not an
 oversight and nothing needs adding here.
 
-Servers MAY require a credential on the creator end point. Supply the
+Servers MAY require a credential on the public-key end point. Supply the
 required headers via `owid.fetchHeaders` before verifying:
 
 ```js
@@ -291,7 +293,7 @@ To use OWID-js:
 |stopAdvert|domain, return url|Promise|Posts the domain and return URL to the `/stop` end point and redirects the browser to the URL contained in the response.|
 |ParseStatus|n/a|Object|Frozen read statuses.|
 |SignatureStatus|n/a|Object|Frozen signature statuses.|
-|fetchHeaders|n/a|Object|Optional HTTP headers sent with the creator request.|
+|fetchHeaders|n/a|Object|Optional HTTP headers sent with the public key request.|
 
 ### Methods
 

@@ -1025,7 +1025,7 @@ var owid = (function () {
      * verify request are built here so the two cannot name different
      * versions of the same creator.
      * @param {Object} instance - the OWID being verified.
-     * @param {string} method - the end point, "creator" or "verify".
+     * @param {string} method - the end point, "public-key" or "verify".
      * @returns {string} the URL, with no query string.
      */
     function creatorApiUrl(instance, method) {
@@ -1044,9 +1044,9 @@ var owid = (function () {
      */
     function verifyWithCreatorKey(instance, unsigned, extra) {
         var subtle = getSubtle();
-        var url = creatorApiUrl(instance, "creator");
+        var url = creatorApiUrl(instance, "public-key") + "?format=spki";
         if (instance.date != null) {
-            url += "?date=" + instance.date;
+            url += "&date=" + instance.date;
         }
         // A redirect is never followed. fetch follows one by default, to
         // any other origin, so a creator whose domain answered 302 to
@@ -1068,28 +1068,34 @@ var owid = (function () {
                 return r.json().then(undefined, function (e) {
                     throw failure(
                         SignatureStatus.VERIFICATION_ERROR,
-                        "the creator response is not valid JSON",
+                        "the public key response is not valid JSON",
                         e);
                 });
             }
             return r.text().then(function (text) {
                 throw failure(
                     SignatureStatus.KEY_UNAVAILABLE,
-                    "'Creator' request HTTP status code: " + r.status,
-                    "'Creator' request HTTP status code: " + r.status +
+                    "'Public key' request HTTP status code: " + r.status,
+                    "'Public key' request HTTP status code: " + r.status +
                     ". Response: " + text);
             });
         }, function (e) {
             throw failure(
                 SignatureStatus.KEY_UNAVAILABLE,
-                "the creator key could not be fetched",
+                "the public key could not be fetched",
                 e);
         }).then(function (c) {
             if (!c || typeof c.publicKeySPKI !== "string") {
                 throw failure(
                     SignatureStatus.VERIFICATION_ERROR,
-                    "the creator response carries no public key",
+                    "the public key response carries no key",
                     "public key PEM contains no key data");
+            }
+            if (spanContradictsItself(c)) {
+                throw failure(
+                    SignatureStatus.INVALID_KEY,
+                    "the public key response states a span that contradicts itself",
+                    "validTo must come with validFrom and be later than it");
             }
             return importSpkiKey(subtle, c.publicKeySPKI).then(
                 undefined,
@@ -1103,6 +1109,26 @@ var owid = (function () {
             return checkSignature(
                 subtle, key, instance.signature, unsigned, extra);
         });
+    }
+
+    /**
+     * Whether the span a public key response states fails the checks a
+     * creator applies before sending it that need no knowledge of the moment
+     * asked about. validTo has to come with validFrom and be later than it.
+     * Either may be null for a creator with one key and no schedule.
+     * @param {Object} c - the parsed public key response.
+     * @returns {boolean} true where the response is not to be trusted.
+     */
+    function spanContradictsItself(c) {
+        if (c.validTo == null) {
+            return false;
+        }
+        if (c.validFrom == null) {
+            return true;
+        }
+        var from = Date.parse(c.validFrom);
+        var to = Date.parse(c.validTo);
+        return isNaN(from) || isNaN(to) || to <= from;
     }
 
     /**
@@ -1125,7 +1151,7 @@ var owid = (function () {
         body.append("parent", encodeBase64(joined));
         body.append("owid", instance.data);
         var url = creatorApiUrl(instance, "verify");
-        // Not followed either, for the same reasons as the creator
+        // Not followed either, for the same reasons as the public key
         // request, and because a redirected POST would resend the
         // identifier and the credential to wherever it pointed.
         return fetch(url, {

@@ -479,7 +479,7 @@ test('a key of the wrong type is not an invalid signature', async () => {
     expect(detailed.status).toBe(owid.SignatureStatus.INVALID_KEY);
 });
 
-// A creator end point that cannot be reached leaves the signature unjudged.
+// A key end point that cannot be reached leaves the signature unjudged.
 test('a key that cannot be fetched is not an invalid signature', async () => {
     fetchMock.mockRejectOnce(new Error("Network failure"));
     var o = owid.parse(signedEnvelope().data).owid;
@@ -492,7 +492,7 @@ test('a key that cannot be fetched is not an invalid signature', async () => {
 
 // A creator that answers with something that is not a key list is a client
 // protocol failure rather than a missing key or a forgery.
-test('a creator response with no key is a verification error', async () => {
+test('a public key response with no key is a verification error', async () => {
     fetchMock.mockResponseOnce(JSON.stringify({ notAKey: true }));
     var o = owid.parse(signedEnvelope().data).owid;
 
