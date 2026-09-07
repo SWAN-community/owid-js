@@ -347,12 +347,13 @@ test('changing a Buffer afterwards does not change the OWID', () => {
 test('writing into a payload read from a Buffer does not change the OWID',
     () => {
         var o = owid.parseBytes(Buffer.from(signedEnvelope().bytes)).owid;
+        var signature = Buffer.from(o.signature);
 
         o.payload.fill(0x41);
         o.signature.fill(0x41);
 
         expect(Buffer.from(o.payload).equals(payload)).toBe(true);
-        expect(o.signature[0]).not.toBe(0x41);
+        expect(Buffer.from(o.signature).equals(signature)).toBe(true);
     });
 
 // The base 64 decode running out of room is this runtime having nowhere to
@@ -479,7 +480,7 @@ test('a key of the wrong type is not an invalid signature', async () => {
     expect(detailed.status).toBe(owid.SignatureStatus.INVALID_KEY);
 });
 
-// A creator end point that cannot be reached leaves the signature unjudged.
+// A key end point that cannot be reached leaves the signature unjudged.
 test('a key that cannot be fetched is not an invalid signature', async () => {
     fetchMock.mockRejectOnce(new Error("Network failure"));
     var o = owid.parse(signedEnvelope().data).owid;
@@ -492,7 +493,7 @@ test('a key that cannot be fetched is not an invalid signature', async () => {
 
 // A creator that answers with something that is not a key list is a client
 // protocol failure rather than a missing key or a forgery.
-test('a creator response with no key is a verification error', async () => {
+test('a public key response with no key is a verification error', async () => {
     fetchMock.mockResponseOnce(JSON.stringify({ notAKey: true }));
     var o = owid.parse(signedEnvelope().data).owid;
 
@@ -556,33 +557,6 @@ test('an object that looks like an OWID is not one', () => {
 
     expect(owid.isOwid(fake)).toBe(false);
     expect(owid.isOwid(real)).toBe(true);
-});
-
-// The same look alike is refused where it would otherwise be folded into the
-// bytes a signature is checked over.
-test('a look alike is refused as another OWID', async () => {
-    var e = signedEnvelope();
-    var o = owid.parse(e.data).owid;
-    var fake = { version: 3, domain: domain, date: 1, payload: payload };
-
-    var detailed = await o.checkSignatureWithPublicKey(e.publicPem, [fake]);
-
-    expect(detailed.ok).toBe(false);
-    expect(detailed.status).toBe(owid.SignatureStatus.VERIFICATION_ERROR);
-    expect(detailed.message).toMatch("owid.parse");
-});
-
-// A failure message names the type that was supplied and never the value, so
-// logging a refusal cannot log whatever an untrusted sender put in it.
-test('a refusal names no part of the input', async () => {
-    var e = signedEnvelope();
-    var o = owid.parse(e.data).owid;
-    var secret = "aSecretACallerShouldNotSeeLogged";
-
-    var detailed = await o.checkSignatureWithPublicKey(
-        e.publicPem, [{ secret: secret }]);
-
-    expect(detailed.message).not.toMatch(secret);
 });
 
 //#endregion

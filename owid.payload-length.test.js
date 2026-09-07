@@ -449,37 +449,3 @@ test('domain of the maximum length verifies', async () => {
     expect(o.domain).toBe(longDomain);
     await expect(o.verifyWithPublicKey(e.publicPem)).resolves.toBe(true);
 });
-
-// A domain longer than the maximum can no longer reach a signature check at
-// all. The read refuses it, so there is no OWID to verify with, and an
-// object that merely carries the same field names is not an OWID and is
-// refused as another OWID as well. Both routes are closed here, and the
-// second is checked with a spy so that the refusal is shown to happen before
-// any signature work.
-test('a domain over the maximum cannot reach a signature check',
-    async () => {
-        var e = signedEnvelope(domain);
-        var o = read(e.data);
-        var fabricated = {
-            version: 3,
-            domain: domainOfLength(maximumDomainLength + 1),
-            date: dateInMinutes,
-            payload: payload
-        };
-        var verifySpy = jest.spyOn(nodeCrypto.webcrypto.subtle, 'verify');
-
-        try {
-            refused(
-                domainEnvelope(fabricated.domain, true),
-                owid.ParseStatus.INVALID_DOMAIN_ENCODING);
-
-            var r = await o.checkSignatureWithPublicKey(
-                e.publicPem, [fabricated]);
-            expect(r.ok).toBe(false);
-            expect(r.status).toBe(
-                owid.SignatureStatus.VERIFICATION_ERROR);
-            expect(verifySpy).not.toHaveBeenCalled();
-        } finally {
-            verifySpy.mockRestore();
-        }
-    });

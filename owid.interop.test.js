@@ -21,7 +21,7 @@
 // verified all of the fixtures and rejected tampered copies. As in
 // owid.crypto.test.js the tests exercise the local public key verification
 // path. Node 24 provides a web crypto implementation, so it is exposed here
-// in the same way a browser would, and the creator end point is mocked to
+// in the same way a browser would, and the key end point is mocked to
 // return the public key matching each fixture's signing key.
 
 const owid = require('./v1');
@@ -51,14 +51,12 @@ function read(data) {
 const utf8PayloadText = "Zürich ❤ OWID £€";
 
 // One fixture set per implementation. The simple case carries the ASCII
-// payload "example". The utf8 case carries the UTF-8 payload above. The
-// chain case is a party OWID with payload "party" whose signature also
-// covers the root OWID in chainRoot, both signed with the same key.
+// payload "example". The utf8 case carries the UTF-8 payload above.
 const fixtures = [
     {
         language: "rust",
         domain: "rust.swan-demo.uk",
-        publicKeySPKI:
+        publicKey:
             "-----BEGIN PUBLIC KEY-----\n" +
             "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQcDroVnBAGAvy1SyUz4MyFxP16ki\n" +
             "aPLulPz92rmbDbFKB6p0xl3iatZQ0uADa+F9cZeemLKtlfPaaue/KvNQOw==\n" +
@@ -70,20 +68,12 @@ const fixtures = [
         utf8:
             "A3J1c3Quc3dhbi1kZW1vLnVrAD69MwAWAAAAWsO8cmljaCDinaQgT1dJRCDC" +
             "o+KCrDHenDds+W587AzXpBb94gmLOloeBJTlHnjCkez4Dz2yAPtjcoQ6M/ZU" +
-            "WDIobtJHE5n9a81pTsn/Kvi74Azzx4s=",
-        chainParty:
-            "A3J1c3Quc3dhbi1kZW1vLnVrAD69MwAFAAAAcGFydHmJ7qaxWgIZUHmGOQb2" +
-            "xC+RuZNwrkMmo1SA9/MfI4SoEpRYdnteXAKUQXxTOK3lmQ3Qz3UwBB6gBb3Q" +
-            "8hi1Wx0R",
-        chainRoot:
-            "A3J1c3Quc3dhbi1kZW1vLnVrAD69MwAEAAAAcm9vdFd0+QLaBLGPyBrQO+VN" +
-            "unBIQZzw8/lhEiDOKTx36Dc93A0n0fzPDMt/C+BdWMqhnL4nVvyurb3IHR7D" +
-            "UAmgmO0="
+            "WDIobtJHE5n9a81pTsn/Kvi74Azzx4s="
     },
     {
         language: "go",
         domain: "go.swan-demo.uk",
-        publicKeySPKI:
+        publicKey:
             "-----BEGIN PUBLIC KEY-----\n" +
             "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEeO51FrQ8AmCFjLnePUH1qQ4GWGxj\n" +
             "1aL5ux6vNJFSRnGTVc5YC8kEwqfOaMEjVWqt4Gbq4+lEnIAgTl76YAGpcA==\n" +
@@ -95,20 +85,12 @@ const fixtures = [
         utf8:
             "A2dvLnN3YW4tZGVtby51awA/vTMAFgAAAFrDvHJpY2gg4p2kIE9XSUQgwqPi" +
             "gqzxY+4QgUGt84xC9HxHmHXDt+wcB0Y9a6E+Txm2F147Qacbp0CtrF8x7QCW" +
-            "ZfkcKCKNGSM8hYZEfYjJtViG+tA+",
-        chainParty:
-            "A2dvLnN3YW4tZGVtby51awA/vTMABQAAAHBhcnR5l7NyNmFw2lxqc4DKJWoq" +
-            "0UVd5ujGV/+fvVxqYTRlwCFxaSuwvnhLQQHjX5spxWb4O08IeuiuGCat1WFB" +
-            "/Wqlyw==",
-        chainRoot:
-            "A2dvLnN3YW4tZGVtby51awA/vTMABAAAAHJvb3R/bEqzG8gAy9yTF1UMEtOl" +
-            "YXBBmn3a20jxXq5NmxIC8iuZvduOXKMf+K8VoAapkWwfpoDKQHS09IhljasZ" +
-            "qC0k"
+            "ZfkcKCKNGSM8hYZEfYjJtViG+tA+"
     },
     {
         language: "dotnet",
         domain: "dotnet.swan-demo.uk",
-        publicKeySPKI:
+        publicKey:
             "-----BEGIN PUBLIC KEY-----\n" +
             "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEec6dTi0JOYGP78lw7/zAjp3r73fZ\n" +
             "A7zSi4Ov90sVxgmqZ4cI1sbj7AbsnBhqJDe5Hu14gDBjZWErL7KpkjEl0A==\n" +
@@ -120,15 +102,7 @@ const fixtures = [
         utf8:
             "A2RvdG5ldC5zd2FuLWRlbW8udWsAPb0zABYAAABaw7xyaWNoIOKdpCBPV0lE" +
             "IMKj4oKsVuaeaDUej0sF+cHfYj/icDBmlBLOviC6ZE28am8EtY+IGuesFcg2" +
-            "rKMybcsAxMmnrDtF2xsk1cJvHgoIYpSJJQ==",
-        chainParty:
-            "A2RvdG5ldC5zd2FuLWRlbW8udWsAPb0zAAUAAABwYXJ0eXtD6H4R7GbvRyFU" +
-            "+bCKgjMAZFFm8KHln80XPwQOBb/Ub9EZfE4Ml3ueRkKX51+MD98RFgTSmjbq" +
-            "rAnzFkLlilA=",
-        chainRoot:
-            "A2RvdG5ldC5zd2FuLWRlbW8udWsAPb0zAAQAAAByb290fErj2LccPYCduWUW" +
-            "8vY2aBjrecDfnTpVpv3+SESJMFW5pcuPKEQik2rC0fWEoB5Vr6e0k5inrhUG" +
-            "iF2c2Y2YDw=="
+            "rKMybcsAxMmnrDtF2xsk1cJvHgoIYpSJJQ=="
     }
 ];
 
@@ -136,7 +110,7 @@ const fixtures = [
 // point can return the right key for each implementation.
 const publicKeys = {};
 fixtures.forEach(f => {
-    publicKeys[f.domain] = f.publicKeySPKI;
+    publicKeys[f.domain] = f.publicKey;
 });
 
 /**
@@ -148,7 +122,7 @@ fixtures.forEach(f => {
  */
 function expectedCreatorUrl(o) {
     return "//" + o.domain + "/owid/api/v" + o.version +
-        "/creator?date=" + o.date;
+        "/public-key?format=spki&date=" + o.date;
 }
 
 /**
@@ -180,10 +154,11 @@ beforeEach(() => {
         // version of the format at its own path, returning 404 for the
         // others, so the key is only handed back on the path that names the
         // version the OWID was written in.
-        if (url.pathname === "/owid/api/v3/creator" &&
+        if (url.pathname === "/owid/api/v3/public-key" &&
             publicKeys[url.hostname]) {
             return Promise.resolve(JSON.stringify({
-                publicKeySPKI: publicKeys[url.hostname]
+                format: "spki",
+                publicKey: publicKeys[url.hostname]
             }));
         }
         return Promise.resolve({
@@ -201,7 +176,7 @@ fixtures.forEach(f => {
         return o.verify().then(valid => {
             expect(valid).toBe(true);
             // The library must have used the public key path, so the only
-            // request is to the creator end point.
+            // request is to the creator's key end point.
             expect(fetch.mock.calls.length).toBe(1);
             expect(fetch.mock.calls[0][0]).toBe(expectedCreatorUrl(o));
             expect(o.version).toBe(3);
@@ -225,28 +200,6 @@ fixtures.forEach(f => {
         // byte to a character and would mangle multi byte sequences.
         var text = Buffer.from(o.payload).toString('utf8');
         expect(text).toBe(utf8PayloadText);
-    });
-
-    test('interop verify ' + f.language + ' party OWID with root OWID ' +
-        'passes', () => {
-        // The party signature covers the party bytes followed by the
-        // complete root OWID, so the root must be supplied to verify.
-        var party = read(f.chainParty);
-
-        return party.verify([f.chainRoot]).then(valid => {
-            expect(valid).toBe(true);
-        });
-    });
-
-    test('interop verify ' + f.language + ' party OWID without root OWID ' +
-        'fails', () => {
-        // Without the root OWID the signed message cannot be rebuilt, so
-        // verification must fail.
-        var party = read(f.chainParty);
-
-        return party.verify().then(valid => {
-            expect(valid).toBe(false);
-        });
     });
 
     test('interop verify ' + f.language + ' tampered OWID fails', () => {

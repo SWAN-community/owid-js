@@ -22,18 +22,29 @@ public key from their well known end point and verifies the ECDSA signature
 locally. When `crypto.subtle` is not available it falls back to the creator's
 remote verify end point.
 
-Both end points are versioned, `/owid/api/v<version>/creator` and
+Both end points are versioned, `/owid/api/v<version>/public-key` and
 `/owid/api/v<version>/verify`, and the version in the path is the version
 byte of the OWID being verified rather than a fixed number, because a
 creator serves each version of the format at its own path and returns 404
 for the others.
 
 The public key is requested for the OWID's own creation date
-(`?date=<minutes>`), so OWIDs signed before a signing-key rotation still
-verify. A creator that does not support the `date` parameter ignores it and
-returns its current key.
+(`?format=spki&date=<minutes>`), so OWIDs signed before a signing-key rotation
+still verify. The answer is the JSON form the specification requires, the key
+as `publicKey`, its encoding as `format`, and the moments it is valid from and
+to. This library asks for and reads the one encoding defined, `spki`, and
+checks that the span does not contradict itself. It holds no cache, so it has
+no use for the span beyond that.
 
-Servers MAY require a credential on the creator end point. Supply the
+This library holds no key cache of its own, unlike the server side ports,
+which each keep one in memory. The request is made with `cache: "default"`
+so the browser's own HTTP cache answers a repeat request according to the
+headers the creator sent. That is deliberate. A cache in the page would
+duplicate what the browser already does, would not survive a reload, and
+would ignore the creator's own expiry headers. The absence is not an
+oversight and nothing needs adding here.
+
+Servers MAY require a credential on the public-key end point. Supply the
 required headers via `owid.fetchHeaders` before verifying:
 
 ```js
@@ -283,7 +294,7 @@ To use OWID-js:
 |stopAdvert|domain, return url|Promise|Posts the domain and return URL to the `/stop` end point and redirects the browser to the URL contained in the response.|
 |ParseStatus|n/a|Object|Frozen read statuses.|
 |SignatureStatus|n/a|Object|Frozen signature statuses.|
-|fetchHeaders|n/a|Object|Optional HTTP headers sent with the creator request.|
+|fetchHeaders|n/a|Object|Optional HTTP headers sent with the public key request.|
 
 ### Methods
 
@@ -344,27 +355,6 @@ o.verify()
     .catch(error => console.log(error)); // The question could not be answered.
 ```
 
-Verify one OWID that was signed with another OWID.
-
-```js
-var o = owid.parse("[signed OWID]").owid;
-var other = owid.parse("[other signed OWID]").owid;
-
-o.verify(other)
-    .then(valid => console.log(valid))
-    .catch(error => console.log(error));
-```
-
-Verify one OWID with multiple OWID base 64 strings.
-
-```js
-var o = owid.parse("[signed OWID]").owid;
-
-o.verify(["[signed OWID 1]", "[signed OWID 2]", "[signed OWID 3]"])
-    .then(valid => console.log(valid))
-    .catch(error => console.log(error));
-```
-
 Verify several OWIDs, each in its own right.
 
 ```js
@@ -392,7 +382,7 @@ owid.parse("[signed OWID]").owid.checkSignature().then(r => {
 |-|-|
 |`var o = new owid(s);`|`var r = owid.parse(s); if (r.ok) { var o = r.owid; }`|
 |`try { new owid(s) } catch (e) { }`|`if (!owid.parse(s).ok) { }`|
-|`new owid().verify(others)`|`owid.verify(others)`|
+|`new owid().verify(others)`|`owid.verify()`, a signature covers its own OWID alone|
 |`new owid().parse(s)`|`owid.parse(s)`|
 |`new owid().stop(undefined, d, r)`|`owid.stopAdvert(d, r)`|
 |`o.owid.version`|`o.version`|

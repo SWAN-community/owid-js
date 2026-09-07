@@ -32,9 +32,8 @@
 // the real service does. It serves each version of the format at its own path
 // and returns 404 for the others, and it picks the signing key by the
 // creation date the request asks for. Both of those matter. Measured against
-// the live service on 4 September 2026, GET /owid/api/v1/creator and
-// /owid/api/v2/creator both answered 404 whilst /owid/api/v3/creator answered
-// 401, meaning it exists and wants a credential.
+// the live service on 4 September 2026, the v1 and v2 paths answered 404
+// whilst the v3 path answered 401, meaning it exists and wants a credential.
 
 const owid = require('./v1');
 const nodeCrypto = require('crypto');
@@ -134,7 +133,7 @@ function mockCreator(options) {
         }
         var url = new URL(urlString);
         if (url.hostname !== expectedDomain ||
-            url.pathname !== "/owid/api/v" + servedVersion + "/creator") {
+            url.pathname !== "/owid/api/v" + servedVersion + "/public-key") {
             return Promise.resolve({
                 status: 404,
                 body: "Status code: 404, method not found"
@@ -160,7 +159,8 @@ function mockCreator(options) {
             });
         }
         return Promise.resolve(JSON.stringify({
-            publicKeySPKI: key.publicKey
+            format: "spki",
+            publicKey: key.publicKey
         }));
     });
 }
@@ -192,7 +192,7 @@ test('the published identifier verifies against the published key schedule',
         expect(fetch.mock.calls.length).toBe(1);
         expect(fetch.mock.calls[0][0]).toBe(
             "//" + o.domain + "/owid/api/v" + o.version +
-            "/creator?date=" + o.date);
+            "/public-key?format=spki&date=" + o.date);
     });
 });
 
